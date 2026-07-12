@@ -32,7 +32,7 @@ if str(_REPO_ROOT_CANDIDATE) not in sys.path:
 from tools.traceability.config import get_config  # noqa: E402
 
 # verify.py 와 동일한 seed-trace 인접성/경로 판정을 재사용해 report 의 "연결 상태"
-# 표시가 verify 의 seed_trace_gap 판정(≤2-hop)과 일관되게 한다 (SMP-601).
+# 표시가 verify 의 seed_trace_gap 판정(≤2-hop)과 일관되게 한다.
 from tools.traceability.verify import (  # noqa: E402
     _build_seed_trace_adjacency,
     _has_seed_trace_path,

@@ -4,7 +4,7 @@
 
 ## trace-config.yml (프로젝트 적응)
 
-추출 대상 경로·어휘·활성 추출기는 `docs/ontology/trace-config.yml`에서 조정한다. **파일이 없으면 이 저장소(location-sharing) 기본값으로 동작하므로**, 기존 동작에는 영향이 없다. 다른 프로젝트가 이 툴킷을 vendoring 할 때는 코드를 고치지 말고 이 config만 작성한다.
+추출 대상 경로·어휘·활성 추출기는 `docs/ontology/trace-config.yml`에서 조정한다. **파일이 없으면 참조 구현 기본값으로 동작하므로**, 기존 동작에는 영향이 없다. 다른 프로젝트가 이 툴킷을 vendoring 할 때는 코드를 고치지 말고 이 config만 작성한다.
 
 ```yaml
 version: 1                      # 지원 버전(현재 1). 불일치 시 exit 2
@@ -22,8 +22,8 @@ paths:                          # 미지정 키는 기본값으로 폴백
   android_test_dirs: [android/app/src/test, android/app/src/androidTest]
   ios_req_docs: [ios/docs/prd/01-platform.md]
   ios_adr_dir: ios/docs/adr
-  ios_test_dirs: [ios/sgsg/sgsgUnitTests, ios/sgsg/sgsgUITests]
-  ios_ui_test_dir: ios/sgsg/sgsgUITests/
+  ios_test_dirs: [ios/App/AppUnitTests, ios/App/AppUITests]
+  ios_ui_test_dir: ios/App/AppUITests/
   ontology_dir: docs/ontology
 priority:
   must: Must                    # verify.py 필수 요구(Requirement) 판정 어휘

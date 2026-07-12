@@ -1,5 +1,5 @@
 """
-ios/sgsg/sgsgUnitTests/**/*.swift 및 ios/sgsg/sgsgUITests/**/*.swift 에서
+ios/App/AppUnitTests/**/*.swift 및 ios/App/AppUITests/**/*.swift 에서
 TestCase 노드와 validates 엣지를 추출한다.
 
 - TestCase 노드: id = {repo 상대 경로}::{함수명}

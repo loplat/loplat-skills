@@ -2,6 +2,7 @@ name: loplat-skills
 version: 0.1.0
 description: loplat 사내 범용 AI agent 스킬 모음 (cross-runtime, SKILL.md 표준)
 author: 서비스개발팀
+license: Apache-2.0
 dependencies:
   apm: []
   mcp: []

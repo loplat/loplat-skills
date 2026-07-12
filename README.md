@@ -54,13 +54,17 @@ apm install -g <이 repo의 로컬 경로 또는 git ref> -t claude,codex,gemini
 4. 절차형 스킬은 Rationalizations(스킵 핑계+반박) / Red Flags / Verification 섹션을 포함한다 (`traceability-init/SKILL.md`가 예시).
 5. 이름 충돌 확인: 기존 스킬 목록(`./install.sh --list`)과 각 런타임의 slash command.
 
+## 라이선스
+
+[Apache License 2.0](LICENSE) — Copyright 2026 Loplat Inc. 툴킷을 다른 프로젝트에 vendoring할 때는 라이선스·저작권 고지를 유지하면 된다(NOTICE 참조).
+
 ## 툴킷 스냅샷 갱신 (traceability)
 
-traceability 툴킷의 upstream 개발·테스트는 location-sharing repo(`tools/traceability/`, 테스트 포함)에서 진행한다. 릴리즈 시:
+traceability 툴킷의 upstream 개발·테스트는 참조 구현 repo(`tools/traceability/`, 테스트 포함)에서 진행한다. 릴리즈 시:
 
 ```sh
 rsync -a --delete --exclude '__pycache__' --exclude 'tests' --exclude 'conftest.py' \
-  <location-sharing>/tools/traceability/ .apm/skills/traceability-init/toolkit/
+  <upstream-repo>/tools/traceability/ .apm/skills/traceability-init/toolkit/
 ```
 
 갱신 후 이 repo에 태그를 남기고, vendoring된 프로젝트는 `trace-config.yml`의 `toolkit.vendored_at`으로 drift를 추적한다.

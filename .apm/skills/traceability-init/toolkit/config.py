@@ -1,8 +1,8 @@
 """trace-config.yml 로더.
 
 docs/ontology/trace-config.yml 이 존재하면 경로·활성 추출기 설정을 읽고,
-없으면 location-sharing 기본값으로 동작한다(하위 호환). 다른 프로젝트가
-이 툴킷을 vendoring 할 때는 코드 수정 없이 config 파일만 작성하면 된다.
+없으면 참조 구현(reference implementation) 기본값으로 동작한다(하위 호환).
+다른 프로젝트가 이 툴킷을 vendoring 할 때는 코드 수정 없이 config 파일만 작성하면 된다.
 
 config 파일이 존재하는데 PyYAML 이 없거나 파일이 손상됐으면
 TraceConfigError 를 던진다 — 호출측(build_index/verify/report)은 이를
@@ -18,7 +18,7 @@ CONFIG_REL_PATH = "docs/ontology/trace-config.yml"
 
 _SUPPORTED_VERSION = 1
 
-# location-sharing 기본값 — config 부재 시 이 값으로 동작한다.
+# 참조 구현 기본값 — config 부재 시 이 값으로 동작한다.
 # 키 이름은 추출기 모듈명과 정렬한다 (vendoring 적응 명세서 역할).
 _DEFAULT_PATHS: dict[str, Any] = {
     "requirements": "docs/requirements/prd.md",
@@ -44,10 +44,10 @@ _DEFAULT_PATHS: dict[str, Any] = {
     ],
     "ios_adr_dir": "ios/docs/adr",
     "ios_test_dirs": [
-        "ios/sgsg/sgsgUnitTests",
-        "ios/sgsg/sgsgUITests",
+        "ios/App/AppUnitTests",
+        "ios/App/AppUITests",
     ],
-    "ios_ui_test_dir": "ios/sgsg/sgsgUITests/",
+    "ios_ui_test_dir": "ios/App/AppUITests/",
     "ontology_dir": "docs/ontology",
 }
 

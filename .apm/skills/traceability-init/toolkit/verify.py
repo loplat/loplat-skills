@@ -1390,34 +1390,34 @@ edges:
         finally:
             os.unlink(tmp_path2)
 
-    # ── 테스트 4: path-param 정규화 (smp-559 DELETE push-tokens) ──
+    # ── 테스트 4: path-param 정규화 (camelCase ↔ snake_case) ──
     fake_nodes_api = [
         {
-            "id": "unregister_push_token_api_v1_devices__device_id__push_tokens_delete",
+            "id": "revoke_access_token_api_v1_users__user_id__access_tokens_delete",
             "type": "ApiOperation",
             "source_file": "docs/api/openapi.json",
             "source_loc": None,
-            "title": "Unregister push token",
+            "title": "Revoke access token",
             "attrs": {
-                "path": "/api/v1/devices/{device_id}/push-tokens",
+                "path": "/api/v1/users/{user_id}/access-tokens",
                 "method": "DELETE",
             },
         }
     ]
     fake_step = {
-        "id": "smp-559#seq-2:step-2",
+        "id": "ex-001#seq-2:step-2",
         "type": "SequenceStep",
-        "source_file": "docs/specs/smp-559.md",
+        "source_file": "docs/specs/ex-001.md",
         "source_loc": "L87",
-        "title": "App->>API: DELETE /api/v1/devices/{deviceId}/push-tokens",
-        "attrs": {"raw": "App->>API: DELETE /api/v1/devices/{deviceId}/push-tokens"},
+        "title": "App->>API: DELETE /api/v1/users/{userId}/access-tokens",
+        "attrs": {"raw": "App->>API: DELETE /api/v1/users/{userId}/access-tokens"},
     }
-    norm_result = _normalize_path("/api/v1/devices/{deviceId}/push-tokens")
-    norm_expected = _normalize_path("/api/v1/devices/{device_id}/push-tokens")
+    norm_result = _normalize_path("/api/v1/users/{userId}/access-tokens")
+    norm_expected = _normalize_path("/api/v1/users/{user_id}/access-tokens")
     if norm_result == norm_expected:
         print(
             f"[selftest] DETECTED path-param normalization OK: "
-            f"{{deviceId}} == {{device_id}} after normalize → '{norm_result}'"
+            f"{{userId}} == {{user_id}} after normalize → '{norm_result}'"
         )
     else:
         print(f"[selftest] FAIL: normalization mismatch '{norm_result}' != '{norm_expected}'")
@@ -1428,15 +1428,15 @@ edges:
     broken_norm = [
         f
         for f in findings_norm2
-        if f.kind == "broken_reference" and "deviceId" in (f.message or "")
+        if f.kind == "broken_reference" and "userId" in (f.message or "")
     ]
     if not broken_norm:
         print(
-            "[selftest] DETECTED smp-559 DELETE push-tokens: "
+            "[selftest] DETECTED DELETE access-tokens: "
             "no false broken_reference after path-param normalization"
         )
     else:
-        print("[selftest] FAIL: false broken_reference for smp-559 push-tokens normalization")
+        print("[selftest] FAIL: false broken_reference for access-tokens path-param normalization")
         return 1
 
     print("[selftest] 모든 탐지 케이스 PASS")

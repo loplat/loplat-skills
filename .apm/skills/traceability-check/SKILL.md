@@ -55,7 +55,7 @@ python3 tools/traceability/report.py --changed <path> [<path> ...]
 
 ## Python 환경 fallback
 
-root Python에 `PyYAML`이 없으면 fail-closed(exit 2) 될 수 있다. 그 경우 조용히 넘기지 말고 **그 repo의 Python 환경 규약**(uv/poetry/venv)으로 같은 도구를 실행한다. 예 — location-sharing은 backend `uv` 환경을 쓴다:
+root Python에 `PyYAML`이 없으면 fail-closed(exit 2) 될 수 있다. 그 경우 조용히 넘기지 말고 **그 repo의 Python 환경 규약**(uv/poetry/venv)으로 같은 도구를 실행한다. 예 — 백엔드가 `uv` 환경을 쓰는 repo라면:
 
 ```sh
 cd backend
@@ -79,7 +79,7 @@ uv run python ../tools/traceability/report.py
 
 ## tools/traceability 코드 변경 시 추가 게이트
 
-repo의 lint 규약으로 검사하고 도구 테스트를 돌린다. 예 — location-sharing:
+repo의 lint 규약으로 검사하고 도구 테스트를 돌린다. 예 — 백엔드 `uv` 환경:
 
 ```sh
 cd backend
