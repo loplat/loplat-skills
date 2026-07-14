@@ -1,18 +1,26 @@
 """
-Traceability report generation entry point (Phase 4 full implementation).
+Traceability report generation entry point.
 
 Run from repo root:
     python3 tools/traceability/report.py
     python3 tools/traceability/report.py --changed docs/requirements/prd.md
+    python3 tools/traceability/report.py --full
 
 Outputs:
     scratch/traceability/report.md  -- human-readable Markdown report
     scratch/traceability/report.html -- self-contained interactive HTML report
 
+Layout (top to bottom, both formats): verdict hero -> action queue -> seed traces ->
+changed-file impact -> node explorer pointer. The verdict must be readable from the
+first screen.
+
 CLI options:
     --changed <path> [<path> ...] -- populates the changed-file impact section
         (nodes with the matching source_file + 1-hop connected nodes/edges)
         No direct git calls -- accepted only as arguments.
+    --full -- embeds the full node list (Node Explorer) and the interactive seed
+        trace SVG graph in report.html. Omitted by default because the full node
+        dump is the dominant cost of the file and isn't needed to read the verdict.
 """
 
 from __future__ import annotations
@@ -311,15 +319,13 @@ def _build_seed_traces_section(
         title = seed.get("title", seed_id)
         layers = seed.get("layers", []) or []
 
-        lines.append(f"### {seed_id}: {_escape_md(title)}\n")
-        lines.append("| Layer | Node id | Source file | Connection status |")
-        lines.append("|---|---|---|---|")
-
         layer_nodes: list[str] = []
         for item in layers:
             nid = item.get("node", "") if isinstance(item, dict) else str(item)
             layer_nodes.append(nid)
 
+        row_lines: list[str] = []
+        seed_ok = True
         for i, nid in enumerate(layer_nodes):
             layer_item = layers[i] if i < len(layers) else {}
             layer_name = (
@@ -334,6 +340,7 @@ def _build_seed_traces_section(
 
             if nid not in node_ids:
                 status = "**BROKEN (node missing)**"
+                seed_ok = False
             elif i == 0:
                 status = "start"
             else:
@@ -349,12 +356,22 @@ def _build_seed_traces_section(
                     status = "indirect edge (<=2-hop)"
                 elif conn == "gap":
                     status = "_(gap — no edge)_"
+                    seed_ok = False
                 else:
                     status = "_(no previous node)_"
+                    seed_ok = False
 
-            lines.append(f"| {_escape_md(layer_name)} | `{nid_esc}` | `{sf_esc}` | {status} |")
+            row_lines.append(f"| {_escape_md(layer_name)} | `{nid_esc}` | `{sf_esc}` | {status} |")
 
+        badge = "OK" if seed_ok else "GAP"
+        lines.append(f"### {seed_id}: {_escape_md(title)} — **{badge}**\n")
+        lines.append("<details>")
+        lines.append("<summary>Show layer detail</summary>\n")
+        lines.append("| Layer | Node id | Source file | Connection status |")
+        lines.append("|---|---|---|---|")
+        lines.extend(row_lines)
         lines.append("")
+        lines.append("</details>\n")
 
     # Summarize seed-related findings from ci-summary
     all_findings = []
@@ -431,12 +448,29 @@ def _build_seed_traces_html(
 
     adjacency = _build_seed_trace_adjacency(nodes, edges)
 
-    html_parts: list[str] = []
+    # Group seed-related CI findings by seed id so each card can show its own findings.
+    findings_by_seed: dict[str, list[dict[str, Any]]] = {}
+    for finding in _ci_findings(ci):
+        if finding.get("kind") not in (
+            "broken_reference",
+            "seed_trace_too_short",
+            "seed_trace_gap",
+        ):
+            continue
+        location = finding.get("location") or ""
+        if not isinstance(location, str) or not location.endswith("seed-traces.yml"):
+            continue
+        seed_id_for_finding = _seed_id_from_finding(finding)
+        if seed_id_for_finding:
+            findings_by_seed.setdefault(seed_id_for_finding, []).append(finding)
+
+    cards: list[str] = []
 
     for seed in seed_list:
         if not isinstance(seed, dict):
             continue
-        seed_id = _escape_html(seed.get("id", "(unnamed)"))
+        raw_seed_id = seed.get("id", "(unnamed)")
+        seed_id = _escape_html(raw_seed_id)
         title = _escape_html(seed.get("title", seed.get("id", "")))
         layers = seed.get("layers", []) or []
 
@@ -445,14 +479,8 @@ def _build_seed_traces_html(
             nid = item.get("node", "") if isinstance(item, dict) else str(item)
             layer_nodes.append(nid)
 
-        html_parts.append(
-            "<h3 style='margin-top:16px'>" + "<code>" + seed_id + "</code>: " + title + "</h3>"
-        )
-        html_parts.append(
-            "<table><thead><tr>"
-            + "<th>Layer</th><th>Node id</th><th>Source file</th><th>Connection status</th>"
-            + "</tr></thead><tbody>"
-        )
+        row_html_parts: list[str] = []
+        seed_ok = True
 
         for i, nid in enumerate(layer_nodes):
             layer_item = layers[i] if i < len(layers) else {}
@@ -471,6 +499,7 @@ def _build_seed_traces_html(
             if nid not in node_ids:
                 status_class = "unlinked"
                 status_text = "BROKEN (node missing)"
+                seed_ok = False
             elif i == 0:
                 status_class = "linked"
                 status_text = "start"
@@ -491,11 +520,13 @@ def _build_seed_traces_html(
                 elif conn == "gap":
                     status_class = "unlinked"
                     status_text = "gap — no edge"
+                    seed_ok = False
                 else:
                     status_class = "unlinked"
                     status_text = "no previous node"
+                    seed_ok = False
 
-            html_parts.append(
+            row_html_parts.append(
                 "<tr>"
                 + "<td class='layer'>"
                 + layer_esc
@@ -514,9 +545,48 @@ def _build_seed_traces_html(
                 + "</tr>"
             )
 
-        html_parts.append("</tbody></table>")
+        badge_class = "ok" if seed_ok else "gap"
+        badge_text = "OK" if seed_ok else "GAP"
 
-    return "\n".join(html_parts)
+        seed_finding_list = findings_by_seed.get(raw_seed_id, [])
+        findings_html = ""
+        if seed_finding_list:
+            finding_items = "".join(
+                "<li><code>"
+                + _escape_html(f.get("kind", ""))
+                + "</code> "
+                + _escape_html(f.get("message") or "")
+                + "</li>"
+                for f in seed_finding_list
+            )
+            findings_html = (
+                "<div class='seed-card-findings'><strong>Findings</strong>"
+                "<ul>" + finding_items + "</ul></div>"
+            )
+
+        cards.append(
+            "<div class='seed-card'>"
+            + "<div class='seed-card-head'>"
+            + "<code>"
+            + seed_id
+            + "</code>: "
+            + title
+            + " <span class='seed-badge "
+            + badge_class
+            + "'>"
+            + badge_text
+            + "</span></div>"
+            + findings_html
+            + "<details><summary>Show layer detail</summary>"
+            + "<table><thead><tr>"
+            + "<th>Layer</th><th>Node id</th><th>Source file</th><th>Connection status</th>"
+            + "</tr></thead><tbody>"
+            + "\n".join(row_html_parts)
+            + "</tbody></table></details>"
+            + "</div>"
+        )
+
+    return '<div class="seed-card-grid">' + "\n".join(cards) + "</div>"
 
 
 def _ci_findings(ci: dict[str, Any]) -> list[dict[str, Any]]:
@@ -849,70 +919,113 @@ def _compute_impact(
 # ────────────────────────────────────────────────────────────────────────
 
 
+def _md_finding_group(title: str, findings: list[dict[str, Any]], top_n: int = 5) -> list[str]:
+    """
+    Renders one Action Queue finding group for Markdown: a "<title> (<count>)" heading,
+    the first `top_n` rows, and an "...and N more" note for the remainder. Unlike the
+    HTML version, the Markdown report never inlines the long tail -- it stays a short
+    pointer back to the HTML report / raw ci-summary.json.
+    """
+    lines = [f"### {title} ({len(findings)})\n"]
+    if not findings:
+        lines.append("_(none)_\n")
+        return lines
+
+    lines.append("| kind | subject | source location | message |")
+    lines.append("|---|---|---|---|")
+    for f in findings[:top_n]:
+        kind = f.get("kind", "")
+        subject = _escape_md(f.get("subject") or "")
+        loc = _escape_md(f.get("location") or "")
+        msg = _escape_md(f.get("message") or "")
+        lines.append(f"| {kind} | {subject} | {loc} | {msg} |")
+    lines.append("")
+
+    remaining = len(findings) - top_n
+    if remaining > 0:
+        lines.append(f"_...and {remaining} more_\n")
+
+    return lines
+
+
 def _build_markdown(
     nodes: list[dict[str, Any]],
     edges: list[dict[str, Any]],
     ci: dict[str, Any],
     changed_paths: list[str],
     repo_root: Path | None = None,
+    full: bool = False,
 ) -> str:
     """
     Generates the Markdown report string.
+
+    Layout (top to bottom): verdict hero -> action queue -> seed traces -> changed-file
+    impact -> node explorer pointer. The verdict must be readable from the first
+    screen, so it always leads.
 
     Args:
         nodes: nodes list from index.json.
         edges: edges list from index.json.
         ci: Full ci-summary.json dict.
         changed_paths: File path list received via the --changed argument.
+        full: When True, notes that the companion HTML report was built with --full
+            (node explorer included). Markdown itself never embeds the node dump.
 
     Returns:
         Markdown report string.
     """
     lines: list[str] = []
 
-    # Header
-    lines.append("# Traceability Report (Phase 4)\n")
-
-    # 1. Summary
     node_type_count: Counter[str] = Counter(n["type"] for n in nodes)
     edge_type_count: Counter[str] = Counter(e["type"] for e in edges)
     det_err = ci.get("deterministic_error_count", 0)
-    det_warn = ci.get("deterministic_warning_count", 0)
     sem_cand = ci.get("semantic_candidate_count", 0)
     cov_count = ci.get("coverage_count", 0)
-    total_f = ci.get("total_findings", 0)
+    review_items = sem_cand + cov_count
     verify_exit = ci.get("summary", {}).get("exit_code", 0)
 
-    lines.append("## Summary\n")
-    lines.append("| Item | Count |")
-    lines.append("|---|---|")
-    lines.append(f"| Total nodes | {len(nodes)} |")
-    lines.append(f"| Total edges | {len(edges)} |")
-    lines.append(f"| deterministic errors | {det_err} |")
-    lines.append(f"| deterministic warnings | {det_warn} |")
-    lines.append(f"| semantic candidates | {sem_cand} |")
-    lines.append(f"| coverage findings | {cov_count} |")
-    lines.append(f"| total findings | {total_f} |")
-    lines.append(f"| verify exit code | {verify_exit} |")
-    lines.append("")
+    det_errors = ci.get("categories", {}).get("deterministic", {}).get("errors", [])
+    sem_candidates = ci.get("categories", {}).get("semantic_candidate", [])
+    cov_findings = ci.get("categories", {}).get("coverage", [])
+    orphans = [f for f in sem_candidates if f.get("kind") == "orphan"]
+    api_unlinked = [f for f in sem_candidates if f.get("kind") == "api_unlinked"]
+    others = [f for f in sem_candidates if f.get("kind") not in ("orphan", "api_unlinked")]
+    coverage_gaps = [f for f in cov_findings if f.get("kind") == "coverage_gap"]
+    drifts = [f for f in cov_findings if f.get("kind") == "test_coverage_drift"]
 
+    # 1. Verdict hero -- must be readable before scrolling.
+    lines.append("# Traceability Report\n")
+    verdict = "PASS" if det_err == 0 else "FAIL"
+    lines.append(f"## Verdict: {verdict}\n")
+    lines.append("| Metric | Count |")
+    lines.append("|---|---|")
+    lines.append(f"| Nodes | {len(nodes)} |")
+    lines.append(f"| Edges | {len(edges)} |")
+    lines.append(f"| Deterministic errors | {det_err} |")
+    lines.append(f"| Review items | {review_items} |")
+    lines.append("")
+    lines.append(f"_verify exit code: {verify_exit}_\n")
+
+    lines.append("<details>")
+    lines.append("<summary>Node / edge type breakdown</summary>\n")
     lines.append("### Count by Node Type\n")
     lines.append("| Node type | Count |")
     lines.append("|---|---|")
     for nt, cnt in sorted(node_type_count.items()):
         lines.append(f"| {nt} | {cnt} |")
     lines.append("")
-
     lines.append("### Count by Edge Type\n")
     lines.append("| Edge type | Count |")
     lines.append("|---|---|")
     for et, cnt in sorted(edge_type_count.items()):
         lines.append(f"| {et} | {cnt} |")
     lines.append("")
+    lines.append("</details>\n")
 
-    # 2. Failure findings (CI hard gate)
-    lines.append("## Failure Findings (CI Hard Gate)\n")
-    det_errors = ci.get("categories", {}).get("deterministic", {}).get("errors", [])
+    # 2. Action Queue -- deterministic errors always shown in full (top priority);
+    # semantic_candidate / coverage findings are grouped by kind, top 5 + "...and N more".
+    lines.append("## Action Queue\n")
+    lines.append("### Deterministic Errors (CI Hard Gate)\n")
     if not det_errors:
         lines.append("> **0 findings, CI green** -- no deterministic errors. CI gate passed.")
     else:
@@ -926,106 +1039,28 @@ def _build_markdown(
             lines.append(f"| {kind} | {subject} | {loc} | {msg} |")
     lines.append("")
 
-    # 3. Semantic drift candidates (agent review)
-    lines.append("## Semantic Drift Candidates (Agent Review)\n")
     lines.append(
-        "> Not a CI failure -- item for agent/human review. Does not affect the hard gate.\n"
+        "> Semantic drift candidates and coverage findings below are not CI failures -- "
+        "items for agent/human review.\n"
     )
-    sem_candidates = ci.get("categories", {}).get("semantic_candidate", [])
-    orphans = [f for f in sem_candidates if f.get("kind") == "orphan"]
-    api_unlinked = [f for f in sem_candidates if f.get("kind") == "api_unlinked"]
-    others = [f for f in sem_candidates if f.get("kind") not in ("orphan", "api_unlinked")]
-
-    if api_unlinked:
-        lines.append(f"### API Unlinked ({len(api_unlinked)})\n")
-        lines.append("| subject (node id) | source file | message |")
-        lines.append("|---|---|---|")
-        for f in api_unlinked[:30]:
-            subject = _escape_md(f.get("subject") or "")
-            loc = _escape_md(f.get("location") or "")
-            msg = _escape_md(f.get("message") or "")
-            lines.append(f"| {subject} | {loc} | {msg} |")
-        if len(api_unlinked) > 30:
-            lines.append(f"| _(+{len(api_unlinked) - 30} more omitted)_ | | |")
-        lines.append("")
-
-    if orphans:
-        lines.append(f"### Orphan Must Requirements ({len(orphans)})\n")
-        lines.append("| subject (node id) | source file | message |")
-        lines.append("|---|---|---|")
-        for f in orphans[:20]:
-            subject = _escape_md(f.get("subject") or "")
-            loc = _escape_md(f.get("location") or "")
-            msg = _escape_md(f.get("message") or "")
-            lines.append(f"| {subject} | {loc} | {msg} |")
-        if len(orphans) > 20:
-            lines.append(f"| _(+{len(orphans) - 20} more omitted)_ | | |")
-        lines.append("")
-
+    lines.extend(_md_finding_group("API Unlinked", api_unlinked))
+    lines.extend(_md_finding_group("Orphan Must Requirements", orphans))
     if others:
-        lines.append(f"### Other semantic_candidate ({len(others)})\n")
-        for f in others:
-            subject = _escape_md(f.get("subject") or "")
-            loc = _escape_md(f.get("location") or "")
-            msg = _escape_md(f.get("message") or "")
-            lines.append(f"- [{f.get('kind')}] **{subject}** @ `{loc}`: {msg}")
-        lines.append("")
+        lines.extend(_md_finding_group("Other Semantic Candidates", others))
+    lines.extend(_md_finding_group("Test Coverage Drift", drifts))
+    lines.extend(_md_finding_group("Coverage Gap", coverage_gaps))
 
-    # 4. Orphan list
-    lines.append("## Orphan List (Must Requirements)\n")
-    orphan_list = orphans
-    if not orphan_list:
-        lines.append("_(none)_")
-    else:
-        lines.append(f"Must requirements missing some edge category: **{len(orphan_list)}**\n")
-        lines.append("| Node id | Source file | Missing edge category |")
-        lines.append("|---|---|---|")
-        for f in sorted(orphan_list, key=lambda x: x.get("subject") or ""):
-            subject = _escape_md(f.get("subject") or "")
-            loc = _escape_md(f.get("location") or "")
-            msg = f.get("message") or ""
-            missing_part = ""
-            if "missing edges:" in msg:
-                missing_part = _escape_md(msg.split("missing edges:")[-1].strip())
-            lines.append(f"| {subject} | {loc} | {missing_part} |")
+    # 3. Seed Traces -- one card (summary line + collapsed detail) per seed.
+    lines.append("## Seed Traces\n")
+    lines.append(
+        "> Core trace seeds -- each seed connects requirement -> ADR -> usecase/sequence "
+        "-> API -> code -> test. **OK** = fully connected, **GAP** = a layer is missing "
+        "or unlinked.\n"
+    )
+    lines.extend(_build_seed_traces_section(nodes, edges, ci, repo_root))
     lines.append("")
 
-    # 5. Coverage
-    lines.append("## Coverage\n")
-    cov_findings = ci.get("categories", {}).get("coverage", [])
-    coverage_gaps = [f for f in cov_findings if f.get("kind") == "coverage_gap"]
-    drifts = [f for f in cov_findings if f.get("kind") == "test_coverage_drift"]
-
-    lines.append(f"- coverage_gap: **{len(coverage_gaps)}** (checklist UC has no validates edge)")
-    lines.append(
-        f"- test_coverage_drift: **{len(drifts)}** (test marker references a UC not on the checklist)\n"
-    )
-
-    if drifts:
-        lines.append(f"### Test Coverage Drift (marker drift) -- {len(drifts)}\n")
-        lines.append("| subject (UC id) | source (test node id) | message |")
-        lines.append("|---|---|---|")
-        for f in drifts:
-            subject = _escape_md(f.get("subject") or "")
-            loc = _escape_md(f.get("location") or "")
-            msg = _escape_md(f.get("message") or "")
-            lines.append(f"| {subject} | {loc} | {msg} |")
-        lines.append("")
-
-    if coverage_gaps:
-        lines.append(f"### Coverage Gap ({len(coverage_gaps)})\n")
-        lines.append("| Node id (UseCase) | Source file | message |")
-        lines.append("|---|---|---|")
-        for f in coverage_gaps[:30]:
-            subject = _escape_md(f.get("subject") or "")
-            loc = _escape_md(f.get("location") or "")
-            msg = _escape_md(f.get("message") or "")
-            lines.append(f"| {subject} | {loc} | {msg} |")
-        if len(coverage_gaps) > 30:
-            lines.append(f"| _(+{len(coverage_gaps) - 30} more omitted)_ | | |")
-        lines.append("")
-
-    # 6. Changed-file impact
+    # 4. Changed-file impact (existing --changed mode, preserved as-is).
     lines.append("## Changed-File Impact Candidates\n")
     if not changed_paths:
         lines.append(
@@ -1065,52 +1100,23 @@ def _build_markdown(
                 lines.append(f"| _(+{len(neighbor_nodes) - 20} more omitted)_ | | |")
             lines.append("")
 
-    # 7. Seed Traces (Phase 7)
-    lines.append("## Seed Traces\n")
-    lines.append(
-        "> Phase 7 core trace seed -- each seed's layer node id + source path + connection status\n"
-    )
-    _seed_traces_section = _build_seed_traces_section(nodes, edges, ci, repo_root)
-    lines.extend(_seed_traces_section)
+    # 5. Node explorer pointer -- the full node dump only ships in the HTML report,
+    # and only when built with --full.
+    lines.append("## Node Explorer\n")
+    if full:
+        lines.append(
+            "_Built with `--full` -- see the Node Explorer section of report.html for the "
+            "full, filterable node list._"
+        )
+    else:
+        lines.append(
+            "_Run `python3 tools/traceability/report.py --full` for the node explorer "
+            "(full node list embedded in report.html)._"
+        )
     lines.append("")
 
-    # 8. Sample Trace Path (based on the first seed in seed-traces.yml)
-    trace = _build_sample_trace(nodes, edges, repo_root)
-    if trace:
-        lines.append("## Sample Trace Path\n")
-        lines.append(
-            "> Core path based on the first seed trace -- includes node id + source file path\n"
-        )
-        lines.append(
-            "> _(unlinked)_ = the node for that layer exists in the index but isn't connected by a direct edge.\n"
-        )
-
-        for i, step in enumerate(trace):
-            prefix = "|-" if i < len(trace) - 1 else "+-"
-            note = step.get("note", "")
-            note_str = f" **{note}**" if note else ""
-            lines.append(f"{prefix} **{step['id']}** `[{step['type']}]`{note_str}")
-            lines.append(f"   - source: `{step['source_file']}`")
-            edge_label = step.get("edge_label", "")
-            if edge_label:
-                lines.append(f"   - edge: _{edge_label}_")
-            lines.append("")
-
-        lines.append("### Connection Status Summary by Trace Layer\n")
-        lines.append("| Layer | Node id | Type | Source file | Connection status |")
-        lines.append("|---|---|---|---|---|")
-        for i, step in enumerate(trace):
-            layer = step.get("layer", "") or f"L{i + 1}"
-            nid = _escape_md(step["id"])
-            ntype = _escape_md(step["type"])
-            sf = _escape_md(step["source_file"])
-            note = step.get("note", "")
-            status = note if note else "direct edge connected"
-            lines.append(f"| {_escape_md(layer)} | {nid} | {ntype} | {sf} | {status} |")
-        lines.append("")
-
     lines.append("---")
-    lines.append("_Phase 4 report. Generated by: `python3 tools/traceability/report.py`_")
+    lines.append("_Generated by: `python3 tools/traceability/report.py`_")
 
     return "\n".join(lines)
 
@@ -1120,10 +1126,16 @@ def _build_markdown(
 # ────────────────────────────────────────────────────────────────────────
 
 
-def _finding_rows_html(findings: list[dict[str, Any]], limit: int = 30) -> str:
-    """Converts the finding list into HTML table rows."""
+def _finding_rows_html(findings: list[dict[str, Any]], limit: int | None = 30) -> str:
+    """
+    Converts the finding list into HTML table rows.
+
+    limit=None renders every finding with no truncation notice (used for the
+    deterministic-error queue, which must always show the full list).
+    """
+    shown = findings if limit is None else findings[:limit]
     rows = []
-    for f in findings[:limit]:
+    for f in shown:
         kind = _escape_html(f.get("kind", ""))
         subject = _escape_html(f.get("subject") or "")
         loc = _escape_html(f.get("location") or "")
@@ -1142,7 +1154,7 @@ def _finding_rows_html(findings: list[dict[str, Any]], limit: int = 30) -> str:
             + msg
             + "</td></tr>"
         )
-    if len(findings) > limit:
+    if limit is not None and len(findings) > limit:
         rows.append(
             "<tr><td colspan='4' class='muted'>... "
             + str(len(findings) - limit)
@@ -1151,12 +1163,45 @@ def _finding_rows_html(findings: list[dict[str, Any]], limit: int = 30) -> str:
     return "\n".join(rows)
 
 
+def _html_finding_group(title: str, findings: list[dict[str, Any]], top_n: int = 5) -> str:
+    """
+    Renders one Action Queue finding group: a "<title> (<count>)" heading, the first
+    `top_n` rows visible, and any remainder tucked into a collapsed <details> block so
+    the page stays scannable without dropping data.
+    """
+    count = len(findings)
+    parts = ["<h3>" + _escape_html(title) + " (" + str(count) + ")</h3>"]
+    if not findings:
+        parts.append("<p class='muted'>(none)</p>")
+        return "\n".join(parts)
+
+    table_head = (
+        "<table><thead><tr><th>kind</th><th>subject</th>"
+        + "<th>source location</th><th>message</th></tr></thead><tbody>"
+    )
+    visible, remaining = findings[:top_n], findings[top_n:]
+
+    parts.append(table_head)
+    parts.append(_finding_rows_html(visible, limit=None))
+    parts.append("</tbody></table>")
+
+    if remaining:
+        parts.append("<details><summary>Show " + str(len(remaining)) + " more</summary>")
+        parts.append(table_head)
+        parts.append(_finding_rows_html(remaining, limit=None))
+        parts.append("</tbody></table>")
+        parts.append("</details>")
+
+    return "\n".join(parts)
+
+
 def _build_html(
     nodes: list[dict[str, Any]],
     edges: list[dict[str, Any]],
     ci: dict[str, Any],
     changed_paths: list[str],
     repo_root: Path | None = None,
+    full: bool = False,
 ) -> str:
     """
     Generates a self-contained interactive HTML report.
@@ -1164,11 +1209,18 @@ def _build_html(
     Zero external CDN/network dependency. CSS/JS inlined.
     Data is inlined at build time (no runtime fetch).
 
+    Layout (top to bottom): verdict hero -> action queue -> seed traces -> changed-file
+    impact -> node explorer. The verdict must be readable from the first screen, so it
+    always leads.
+
     Args:
         nodes: nodes list from index.json.
         edges: edges list from index.json.
         ci: Full ci-summary.json dict.
         changed_paths: File path list from the --changed argument.
+        full: When True, embeds the full node list (Node Explorer) and the interactive
+            seed trace SVG graph. The default build omits both -- they account for the
+            vast majority of the file's size and aren't needed to read the verdict.
 
     Returns:
         HTML string.
@@ -1179,6 +1231,7 @@ def _build_html(
     det_err = ci.get("deterministic_error_count", 0)
     sem_cand = ci.get("semantic_candidate_count", 0)
     cov_count = ci.get("coverage_count", 0)
+    review_items = sem_cand + cov_count
     total_f = ci.get("total_findings", 0)
     verify_exit = ci.get("summary", {}).get("exit_code", 0)
 
@@ -1188,11 +1241,9 @@ def _build_html(
     cov_findings = ci.get("categories", {}).get("coverage", [])
     orphans = [f for f in sem_candidates if f.get("kind") == "orphan"]
     api_unlinked = [f for f in sem_candidates if f.get("kind") == "api_unlinked"]
+    others = [f for f in sem_candidates if f.get("kind") not in ("orphan", "api_unlinked")]
     coverage_gaps = [f for f in cov_findings if f.get("kind") == "coverage_gap"]
     drifts = [f for f in cov_findings if f.get("kind") == "test_coverage_drift"]
-
-    # Trace data
-    trace = _build_sample_trace(nodes, edges, repo_root)
 
     # changed-file impact
     direct_nodes: list[dict[str, Any]] = []
@@ -1200,89 +1251,44 @@ def _build_html(
     if changed_paths:
         direct_nodes, neighbor_nodes = _compute_impact(nodes, edges, changed_paths)
 
-    # Inline data JSON (build time)
-    all_node_types = sorted(node_type_count.keys())
-    nodes_for_js = [
-        {
-            "id": n["id"],
-            "type": n["type"],
-            "source_file": n.get("source_file", ""),
-            "title": (n.get("title") or "")[:120],
-        }
-        for n in nodes
-    ]
-    nodes_json = json.dumps(nodes_for_js, ensure_ascii=False)
-    all_types_json = json.dumps(all_node_types, ensure_ascii=False)
-    trace_json = json.dumps(trace, ensure_ascii=False)
-    seed_graphs_json = json.dumps(
-        _build_seed_graph_payload(nodes, edges, ci, repo_root),
-        ensure_ascii=False,
-    )
-    changed_paths_json = json.dumps(changed_paths, ensure_ascii=False)
-    direct_nodes_json = json.dumps(
-        [
-            {"id": n["id"], "type": n.get("type", ""), "source_file": n.get("source_file", "")}
-            for n in direct_nodes[:30]
-        ],
-        ensure_ascii=False,
-    )
-    neighbor_nodes_json = json.dumps(
-        [
-            {"id": n["id"], "type": n.get("type", ""), "source_file": n.get("source_file", "")}
-            for n in neighbor_nodes[:20]
-        ],
-        ensure_ascii=False,
-    )
+    # Inline data JSON (build time). NODES/ALL_TYPES/SEED_GRAPHS only ship with --full --
+    # NODES alone is the full node dump and dominates the file size, so the default
+    # build omits it (and the Node Explorer / seed graph markup that consumes it).
+    nodes_json = all_types_json = seed_graphs_json = ""
+    if full:
+        all_node_types = sorted(node_type_count.keys())
+        nodes_for_js = [
+            {
+                "id": n["id"],
+                "type": n["type"],
+                "source_file": n.get("source_file", ""),
+                "title": (n.get("title") or "")[:120],
+            }
+            for n in nodes
+        ]
+        nodes_json = json.dumps(nodes_for_js, ensure_ascii=False)
+        all_types_json = json.dumps(all_node_types, ensure_ascii=False)
+        seed_graphs_json = json.dumps(
+            _build_seed_graph_payload(nodes, edges, ci, repo_root),
+            ensure_ascii=False,
+        )
 
-    # CI finding rows
-    ci_error_rows = (
-        _finding_rows_html(det_errors)
+    # Action Queue: deterministic errors are always shown in full (top priority, no
+    # truncation); semantic_candidate / coverage findings are grouped by kind with a
+    # top-5-then-<details> pattern so the page stays scannable without dropping data.
+    det_error_rows_html = (
+        _finding_rows_html(det_errors, limit=None)
         if det_errors
         else "<tr><td colspan='4' class='green'>0 findings, CI green</td></tr>"
     )
-    api_unlinked_rows = _finding_rows_html(api_unlinked, 25)
-    orphan_rows = _finding_rows_html(orphans, 25)
-    drift_rows = _finding_rows_html(drifts)
-    gap_rows = _finding_rows_html(coverage_gaps, 30)
+    api_unlinked_group_html = _html_finding_group("API Unlinked", api_unlinked)
+    orphan_group_html = _html_finding_group("Orphan Must Requirements", orphans)
+    others_group_html = _html_finding_group("Other Semantic Candidates", others) if others else ""
+    drift_group_html = _html_finding_group("Test Coverage Drift", drifts)
+    gap_group_html = _html_finding_group("Coverage Gap", coverage_gaps)
 
-    # Trace HTML rows (server-side render)
-    trace_html_rows = []
-    for i, step in enumerate(trace):
-        layer = step.get("layer", "") or f"L{i + 1}"
-        note = step.get("note", "")
-        status_class = "unlinked" if note else "linked"
-        status_text = _escape_html(note) if note else "direct edge connected"
-        step_id = _escape_html(step.get("id", ""))
-        step_type = step.get("type", "")
-        step_type_esc = _escape_html(step_type)
-        step_type_badge = step_type.lower()[:12]
-        step_sf = _escape_html(step.get("source_file", ""))
-        layer_esc = _escape_html(layer)
-        row = (
-            "<tr>"
-            + "<td class='layer'>"
-            + layer_esc
-            + "</td>"
-            + "<td><code class='node-id'>"
-            + step_id
-            + "</code></td>"
-            + "<td><span class='badge badge-"
-            + step_type_badge
-            + "'>"
-            + step_type_esc
-            + "</span></td>"
-            + "<td><span class='path'>"
-            + step_sf
-            + "</span></td>"
-            + "<td class='"
-            + status_class
-            + "'>"
-            + status_text
-            + "</td>"
-            + "</tr>"
-        )
-        trace_html_rows.append(row)
-    trace_html = "\n".join(trace_html_rows)
+    # Seed Traces: card grid (name + OK/GAP badge, detail table collapsed by default).
+    seed_cards_html = _build_seed_traces_html(nodes, edges, ci, repo_root)
 
     # changed-file impact HTML
     impact_changed_str = _escape_html(", ".join(changed_paths)) if changed_paths else "&#8212;"
@@ -1356,11 +1362,6 @@ def _build_html(
         )
     edge_table_rows = "\n".join(edge_rows_html)
 
-    # CI status color
-    det_err_class = "val-red" if det_err > 0 else "val-green"
-    exit_class = "val-green" if verify_exit == 0 else "val-red"
-    ci_status_text = "0 findings, CI green" if det_err == 0 else (str(det_err) + " errors")
-
     # HTML template
     parts: list[str] = []
     parts.append("<!doctype html>")
@@ -1368,7 +1369,7 @@ def _build_html(
     parts.append("<head>")
     parts.append('<meta charset="utf-8">')
     parts.append('<meta name="viewport" content="width=device-width, initial-scale=1">')
-    parts.append("<title>Traceability Report -- Phase 4</title>")
+    parts.append("<title>Traceability Report</title>")
     parts.append("<style>")
     parts.append("""
 :root {
@@ -1522,11 +1523,32 @@ tr:hover td { background: #faf8f3; }
 .bar-track { flex: 1; height: 14px; background: var(--surface2); border-radius: 3px; overflow: hidden; }
 .bar-fill { height: 100%; background: var(--teal); border-radius: 3px; min-width: 2px; }
 .bar-cnt { font-size: 12px; font-weight: 700; width: 40px; text-align: right; flex-shrink: 0; }
-.trace-step { padding: 4px 0; border-bottom: 1px dotted var(--line); font-family: "SFMono-Regular", Consolas, Menlo, monospace; font-size: 12px; }
-.trace-step:last-child { border-bottom: none; }
-.trace-chain {
-  background: var(--surface2); border: 1px solid var(--line);
-  border-radius: 6px; padding: 12px 16px; margin-bottom: 16px;
+.verdict-banner {
+  padding: 18px 20px; border-radius: 8px; font-size: 22px; font-weight: 800;
+  text-align: center; margin-bottom: 16px; letter-spacing: 0.04em;
+}
+.verdict-banner.pass { background: #eaf7ea; color: var(--green); border: 2px solid #b8ddb8; }
+.verdict-banner.fail { background: #fdeaea; color: var(--red); border: 2px solid #f5c6c6; }
+.seed-card-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+}
+.seed-card {
+  border: 1px solid var(--line); border-radius: 8px;
+  background: var(--surface2); padding: 12px 14px;
+}
+.seed-card-head { font-size: 13px; font-weight: 700; }
+.seed-badge {
+  display: inline-block; font-size: 10px; font-weight: 800; padding: 1px 8px;
+  border-radius: 10px; text-transform: uppercase; margin-left: 6px;
+}
+.seed-badge.ok { background: #daf0da; color: var(--green); }
+.seed-badge.gap { background: #fde8e8; color: var(--red); }
+.seed-card-findings { font-size: 12px; color: var(--muted); margin: 6px 0; }
+.seed-card-findings ul { margin-left: 16px; }
+.seed-card table { margin-top: 8px; }
+details > summary {
+  cursor: pointer; font-weight: 600; font-size: 12px; color: var(--muted); padding: 4px 0;
 }
 .seed-graph-toolbar {
   display: flex; align-items: center; justify-content: space-between;
@@ -1625,7 +1647,7 @@ tr:hover td { background: #faf8f3; }
     parts.append("</head>")
     parts.append("<body>")
     parts.append("<header>")
-    parts.append("<h1>Traceability Report -- Phase 4</h1>")
+    parts.append("<h1>Traceability Report</h1>")
     parts.append(
         "<div class='meta'>nodes "
         + str(len(nodes))
@@ -1639,32 +1661,30 @@ tr:hover td { background: #faf8f3; }
     )
     parts.append("</header>")
     parts.append("<nav>")
-    for anchor, label in [
-        ("summary", "Summary"),
-        ("ci-findings", "CI Hard Gate"),
-        ("agent-findings", "Agent Review"),
-        ("coverage", "Coverage"),
-        ("impact", "Changed-file Impact"),
-        ("seed-graph", "Seed Graph"),
+    nav_items = [
+        ("verdict", "Verdict"),
+        ("action-queue", "Action Queue"),
         ("seed-traces", "Seed Traces"),
-        ("trace", "Sample Trace"),
+        ("impact", "Changed-file Impact"),
         ("nodes", "Node Explorer"),
-    ]:
+    ]
+    for anchor, label in nav_items:
         parts.append('<a href="#' + anchor + '">' + label + "</a>")
     parts.append("</nav>")
     parts.append('<div class="container">')
 
-    # Summary section
-    parts.append('<section id="summary">')
-    parts.append("<h2>Summary <span class='badge-section badge-info'>Overview</span></h2>")
+    # 1. Verdict hero -- must be readable before scrolling.
+    verdict_pass = det_err == 0
+    verdict_class = "pass" if verdict_pass else "fail"
+    verdict_text = "PASS" if verdict_pass else "FAIL"
+    parts.append('<section id="verdict">')
+    parts.append("<div class='verdict-banner " + verdict_class + "'>" + verdict_text + "</div>")
     parts.append('<div class="summary-grid">')
     stat_cards = [
-        (str(len(nodes)), "Total nodes", "val-blue"),
-        (str(len(edges)), "Total edges", "val-blue"),
-        (str(det_err), "CI errors", det_err_class),
-        (str(sem_cand), "Semantic candidates", "val-amber"),
-        (str(cov_count), "Coverage findings", "val-amber"),
-        (str(verify_exit), "verify exit", exit_class),
+        (str(len(nodes)), "Nodes", "val-blue"),
+        (str(len(edges)), "Edges", "val-blue"),
+        (str(det_err), "Deterministic errors", "val-red" if det_err else "val-green"),
+        (str(review_items), "Review items", "val-amber" if review_items else "val-green"),
     ]
     for val, lbl, cls in stat_cards:
         parts.append(
@@ -1680,90 +1700,51 @@ tr:hover td { background: #faf8f3; }
             + "</div>"
         )
     parts.append("</div>")
+    parts.append("<details>")
+    parts.append("<summary>Node / edge type breakdown</summary>")
     parts.append("<h3>Distribution by Node Type</h3>")
     parts.append(bar_html)
     parts.append("<h3 style='margin-top:16px'>Count by Edge Type</h3>")
     parts.append("<table><thead><tr><th>Edge type</th><th>Count</th></tr></thead><tbody>")
     parts.append(edge_table_rows)
     parts.append("</tbody></table>")
+    parts.append("</details>")
     parts.append("</section>")
 
-    # CI Hard Gate section
-    parts.append('<section id="ci-findings" class="ci-section">')
-    parts.append(
-        "<h2>Failure Findings <span class='badge-section badge-ci'>CI Hard Gate</span></h2>"
-    )
-    parts.append(
-        "<p style='font-size:12px;color:var(--muted);margin-bottom:12px;'>"
-        + "<strong>deterministic</strong> category -- severity=error -&gt; CI failure (exit 1). Currently <strong>"
-        + ci_status_text
-        + "</strong>.</p>"
-    )
+    # 2. Action Queue -- deterministic errors always shown in full (top priority);
+    # semantic_candidate / coverage findings grouped by kind, top 5 + collapsed rest.
+    parts.append('<section id="action-queue" class="ci-section">')
+    parts.append("<h2>Action Queue <span class='badge-section badge-ci'>Fix These</span></h2>")
+    parts.append("<h3>Deterministic Errors (CI Hard Gate)</h3>")
     parts.append(
         "<table><thead><tr><th>kind</th><th>subject (node id)</th>"
         + "<th>source location</th><th>message</th></tr></thead><tbody>"
     )
-    parts.append(ci_error_rows)
+    parts.append(det_error_rows_html)
     parts.append("</tbody></table>")
+    parts.append(
+        "<p style='font-size:12px;color:var(--muted);margin:12px 0;'>"
+        + "Semantic drift candidates and coverage findings below are not CI failures -- "
+        + "items for agent/human review.</p>"
+    )
+    parts.append(api_unlinked_group_html)
+    parts.append(orphan_group_html)
+    if others_group_html:
+        parts.append(others_group_html)
+    parts.append(drift_group_html)
+    parts.append(gap_group_html)
     parts.append("</section>")
 
-    # Agent Review section
-    parts.append('<section id="agent-findings" class="agent-section">')
-    parts.append(
-        "<h2>Semantic Drift Candidates <span class='badge-section badge-agent'>Agent Review</span></h2>"
-    )
+    # 3. Seed Traces -- card grid (name + OK/GAP badge, detail table collapsed).
+    parts.append('<section id="seed-traces">')
+    parts.append("<h2>Seed Traces <span class='badge-section badge-info'>Core Paths</span></h2>")
     parts.append(
         "<p style='font-size:12px;color:var(--muted);margin-bottom:12px;'>"
-        + "<strong>semantic_candidate</strong> category -- not a CI failure. Item for agent/human review. "
-        + "api_unlinked: <strong>"
-        + str(len(api_unlinked))
-        + "</strong> &middot; "
-        + "orphan: <strong>"
-        + str(len(orphans))
-        + "</strong></p>"
+        + "Each seed connects requirement &rarr; ADR &rarr; usecase/sequence &rarr; API &rarr; "
+        + "code &rarr; test. <strong>OK</strong> = every layer connected, "
+        + "<strong>GAP</strong> = a layer is missing or unlinked.</p>"
     )
-    parts.append("<h3>API Unlinked (" + str(len(api_unlinked)) + ")</h3>")
-    parts.append(
-        "<table><thead><tr><th>kind</th><th>subject (node id)</th>"
-        + "<th>source file</th><th>message</th></tr></thead><tbody>"
-    )
-    parts.append(api_unlinked_rows)
-    parts.append("</tbody></table>")
-    parts.append("<h3>Orphan Must Requirements (" + str(len(orphans)) + ")</h3>")
-    parts.append(
-        "<table><thead><tr><th>kind</th><th>subject (node id)</th>"
-        + "<th>source file</th><th>missing edge</th></tr></thead><tbody>"
-    )
-    parts.append(orphan_rows)
-    parts.append("</tbody></table>")
-    parts.append("</section>")
-
-    # Coverage section
-    parts.append('<section id="coverage" class="agent-section">')
-    parts.append("<h2>Coverage <span class='badge-section badge-coverage'>Coverage</span></h2>")
-    parts.append(
-        "<p style='font-size:12px;color:var(--muted);margin-bottom:12px;'>"
-        + "coverage_gap: <strong>"
-        + str(len(coverage_gaps))
-        + "</strong> &middot; "
-        + "test_coverage_drift (marker drift): <strong>"
-        + str(len(drifts))
-        + "</strong></p>"
-    )
-    parts.append("<h3>Test Coverage Drift -- " + str(len(drifts)) + "</h3>")
-    parts.append(
-        "<table><thead><tr><th>kind</th><th>subject (UC id)</th>"
-        + "<th>source (test)</th><th>message</th></tr></thead><tbody>"
-    )
-    parts.append(drift_rows)
-    parts.append("</tbody></table>")
-    parts.append("<h3>Coverage Gap -- " + str(len(coverage_gaps)) + "</h3>")
-    parts.append(
-        "<table><thead><tr><th>kind</th><th>subject (UseCase id)</th>"
-        + "<th>source file</th><th>message</th></tr></thead><tbody>"
-    )
-    parts.append(gap_rows)
-    parts.append("</tbody></table>")
+    parts.append(seed_cards_html)
     parts.append("</section>")
 
     # Changed-file Impact section
@@ -1784,128 +1765,103 @@ tr:hover td { background: #faf8f3; }
     parts.append("</tbody></table>")
     parts.append("</section>")
 
-    # Seed Trace Graph section
-    parts.append('<section id="seed-graph">')
-    parts.append("<h2>Seed Trace Graph <span class='badge-section badge-info'>Visual</span></h2>")
-    parts.append(
-        "<p style='font-size:12px;color:var(--muted);margin-bottom:12px;'>"
-        + "Displays seed-traces.yml's adjacent layer connections as an SVG graph. "
-        + "The red dashed line marks missing link candidates and shares the same basis as the gap status in the table below.</p>"
-    )
-    parts.append('<div class="seed-graph-toolbar">')
-    parts.append(
-        '<label class="seed-select-label" for="seed-graph-select">'
-        + "Seed"
-        + '<select id="seed-graph-select"></select>'
-        + "</label>"
-    )
-    parts.append(
-        '<div class="seed-graph-legend">'
-        + '<span class="legend-item"><span class="legend-line"></span>direct edge</span>'
-        + '<span class="legend-item"><span class="legend-line legend-manual"></span>manual edge</span>'
-        + '<span class="legend-item"><span class="legend-line legend-gap"></span>missing link</span>'
-        + "</div>"
-    )
-    parts.append("</div>")
-    parts.append('<div id="seed-graph-summary" class="seed-graph-summary"></div>')
-    parts.append('<div class="seed-graph-frame">')
-    parts.append(
-        '<svg id="seed-graph-svg" class="seed-graph-svg" role="img" '
-        + 'aria-label="Seed trace graph"></svg>'
-    )
-    parts.append("</div>")
-    parts.append('<div id="seed-node-detail" class="seed-node-detail"></div>')
-    parts.append('<div id="seed-graph-findings" class="seed-graph-findings"></div>')
-    parts.append("</section>")
-
-    # Seed Traces section (Phase 7)
-    parts.append('<section id="seed-traces">')
-    parts.append("<h2>Seed Traces <span class='badge-section badge-info'>Phase 7</span></h2>")
-    parts.append(
-        "<p style='font-size:12px;color:var(--muted);margin-bottom:12px;'>"
-        + "7 core trace seeds. Each seed connects at least 5 of the layers "
-        + "requirement → ADR → usecase/sequence → API → code → test. "
-        + "<em>(gap)</em> = adjacent layers not connected by an edge (warn, not a CI failure).</p>"
-    )
-    # seed trace table (server-side render)
-    _seed_rows_html = _build_seed_traces_html(nodes, edges, ci, repo_root)
-    parts.append(_seed_rows_html)
-    parts.append("</section>")
-
-    # Sample Trace section (based on the first seed in seed-traces.yml; omitted if no seed)
-    if trace:
-        _trace_anchor = _escape_html(trace[0].get("id", ""))
-        parts.append('<section id="trace">')
+    # Seed Trace Graph -- interactive SVG, only built with --full (it needs the
+    # per-node excerpt payload, which is the other large contributor to file size).
+    if full:
+        parts.append('<section id="seed-graph">')
         parts.append(
-            "<h2>Sample Trace Path "
-            f"<span class='badge-section badge-info'>{_trace_anchor} start</span></h2>"
+            "<h2>Seed Trace Graph <span class='badge-section badge-info'>--full</span></h2>"
         )
         parts.append(
             "<p style='font-size:12px;color:var(--muted);margin-bottom:12px;'>"
-            + "Core path based on the first seed trace. "
-            + "<em>(unlinked)</em> = the node for that layer exists in the index but isn't connected by a direct edge.</p>"
+            + "Displays seed-traces.yml's adjacent layer connections as an SVG graph. "
+            + "The red dashed line marks missing link candidates and shares the same basis as the gap status in the seed cards above.</p>"
         )
-        parts.append('<div class="trace-chain" id="trace-chain">')
-        parts.append('<div id="trace-steps-rendered"></div>')
-        parts.append("</div>")
+        parts.append('<div class="seed-graph-toolbar">')
         parts.append(
-            "<table><thead><tr><th>Layer</th><th>Node id</th><th>Type</th>"
-            + "<th>Source file</th><th>Connection status</th></tr></thead><tbody>"
+            '<label class="seed-select-label" for="seed-graph-select">'
+            + "Seed"
+            + '<select id="seed-graph-select"></select>'
+            + "</label>"
         )
-        parts.append(trace_html)
-        parts.append("</tbody></table>")
+        parts.append(
+            '<div class="seed-graph-legend">'
+            + '<span class="legend-item"><span class="legend-line"></span>direct edge</span>'
+            + '<span class="legend-item"><span class="legend-line legend-manual"></span>manual edge</span>'
+            + '<span class="legend-item"><span class="legend-line legend-gap"></span>missing link</span>'
+            + "</div>"
+        )
+        parts.append("</div>")
+        parts.append('<div id="seed-graph-summary" class="seed-graph-summary"></div>')
+        parts.append('<div class="seed-graph-frame">')
+        parts.append(
+            '<svg id="seed-graph-svg" class="seed-graph-svg" role="img" '
+            + 'aria-label="Seed trace graph"></svg>'
+        )
+        parts.append("</div>")
+        parts.append('<div id="seed-node-detail" class="seed-node-detail"></div>')
+        parts.append('<div id="seed-graph-findings" class="seed-graph-findings"></div>')
         parts.append("</section>")
 
-    # Node Explorer section (filter)
+    # 5. Node Explorer -- the full node dump only ships with --full.
     parts.append('<section id="nodes">')
     parts.append("<h2>Node Explorer <span class='badge-section badge-info'>Filter</span></h2>")
-    parts.append(
-        "<p style='font-size:12px;color:var(--muted);margin-bottom:8px;'>"
-        + "Toggle node types to show/hide. Total <span id='visible-count'>"
-        + str(len(nodes))
-        + "</span> / "
-        + str(len(nodes))
-        + " nodes shown.</p>"
-    )
-    parts.append('<div class="filter-panel" id="filter-panel">')
-    parts.append('<div id="filter-checkboxes"></div>')
-    parts.append('<div class="filter-actions">')
-    parts.append('<button class="btn-sm" onclick="setAll(true)">Select All</button>')
-    parts.append('<button class="btn-sm" onclick="setAll(false)">Deselect All</button>')
-    parts.append("</div></div>")
-    parts.append(
-        '<div id="node-search-wrap" style="margin-bottom:10px;">'
-        + '<input id="node-search" type="text" placeholder="Search node id or file path..."'
-        + ' style="width:100%;padding:6px 10px;border:1px solid var(--line);border-radius:4px;'
-        + 'font-size:13px;background:var(--surface);" oninput="applyFilter()"></div>'
-    )
-    parts.append('<div style="overflow-x:auto;">')
-    parts.append('<table id="node-table">')
-    parts.append(
-        "<thead><tr>"
-        + "<th style='width:280px'>Node id</th>"
-        + "<th style='width:130px'>Type</th>"
-        + "<th>Source file</th></tr></thead>"
-    )
-    parts.append('<tbody id="node-tbody"></tbody>')
-    parts.append("</table></div>")
-    parts.append(
-        '<p id="node-table-hint" style="font-size:11px;color:var(--muted);margin-top:6px;">'
-        + "Showing up to 500 rows.</p>"
-    )
+    if not full:
+        parts.append(
+            "<p style='font-size:12px;color:var(--muted);'>"
+            + "Run <code>python3 tools/traceability/report.py --full</code> for the node "
+            + "explorer (full, filterable node list).</p>"
+        )
+    else:
+        parts.append(
+            "<p style='font-size:12px;color:var(--muted);margin-bottom:8px;'>"
+            + "Toggle node types to show/hide. Total <span id='visible-count'>"
+            + str(len(nodes))
+            + "</span> / "
+            + str(len(nodes))
+            + " nodes shown.</p>"
+        )
+        parts.append('<div class="filter-panel" id="filter-panel">')
+        parts.append('<div id="filter-checkboxes"></div>')
+        parts.append('<div class="filter-actions">')
+        parts.append('<button class="btn-sm" onclick="setAll(true)">Select All</button>')
+        parts.append('<button class="btn-sm" onclick="setAll(false)">Deselect All</button>')
+        parts.append("</div></div>")
+        parts.append(
+            '<div id="node-search-wrap" style="margin-bottom:10px;">'
+            + '<input id="node-search" type="text" placeholder="Search node id or file path..."'
+            + ' style="width:100%;padding:6px 10px;border:1px solid var(--line);border-radius:4px;'
+            + 'font-size:13px;background:var(--surface);" oninput="applyFilter()"></div>'
+        )
+        parts.append('<div style="overflow-x:auto;">')
+        parts.append('<table id="node-table">')
+        parts.append(
+            "<thead><tr>"
+            + "<th style='width:280px'>Node id</th>"
+            + "<th style='width:130px'>Type</th>"
+            + "<th>Source file</th></tr></thead>"
+        )
+        parts.append('<tbody id="node-tbody"></tbody>')
+        parts.append("</table></div>")
+        parts.append(
+            '<p id="node-table-hint" style="font-size:11px;color:var(--muted);margin-top:6px;">'
+            + "Showing up to 500 rows.</p>"
+        )
     parts.append("</section>")
     parts.append("</div>")  # /container
 
-    # Inline JS
+    # Inline JS -- only needed with --full (default build uses native <details> disclosure,
+    # no script required).
+    if not full:
+        parts.append("</body>")
+        parts.append("</html>")
+        return "\n".join(parts)
+
     parts.append("<script>")
     parts.append("/* Build-time inlined data -- no runtime fetch */")
     parts.append("var NODES = " + nodes_json + ";")
     parts.append("var ALL_TYPES = " + all_types_json + ";")
-    parts.append("var TRACE_DATA = " + trace_json + ";")
     parts.append("var SEED_GRAPHS = " + seed_graphs_json + ";")
-    parts.append("var CHANGED_PATHS = " + changed_paths_json + ";")
-    parts.append("var DIRECT_NODES = " + direct_nodes_json + ";")
-    parts.append("var NEIGHBOR_NODES = " + neighbor_nodes_json + ";")
     parts.append("""
 /* Node type filter UI */
 var activeTypes = new Set(ALL_TYPES);
@@ -1987,32 +1943,6 @@ function renderNodeTable() {
     frag.appendChild(tr);
   });
   tbody.appendChild(frag);
-}
-
-/* Trace chain rendering */
-function renderTraceChain() {
-  var container = document.getElementById("trace-steps-rendered");
-  var layerLabels = [
-    "L1 Requirement", "L2 ADR", "L3 ApiOperation",
-    "L4a ConsentsService", "L4b AuthService",
-    "L5a TestCase", "L5b TestCase"
-  ];
-  TRACE_DATA.forEach(function(step, i) {
-    var div = document.createElement("div");
-    div.className = "trace-step";
-    var layer = layerLabels[i] || ("L" + (i+1));
-    var note = step.note || "";
-    var isLast = (i === TRACE_DATA.length - 1);
-    var prefix = isLast ? "+-" : "|-";
-    var noteHtml = note ? ' <em style="color:var(--amber)">' + escHtml(note) + "</em>" : "";
-    div.innerHTML = (
-      prefix + " <strong>" + escHtml(step.id) + "</strong>"
-      + " [" + escHtml(step.type) + "]"
-      + noteHtml
-      + "<br>&nbsp;&nbsp;&nbsp;source: <span class='path'>" + escHtml(step.source_file) + "</span>"
-    );
-    container.appendChild(div);
-  });
 }
 
 /* Seed trace graph rendering */
@@ -2318,16 +2248,9 @@ function renderSeedGraph() {
   }
 }
 
-function escHtml(s) {
-  return String(s)
-    .replace(/&/g, "&amp;").replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-}
-
 /* Initialize */
 buildCheckboxes();
 renderNodeTable();
-renderTraceChain();
 buildSeedGraphSelector();
 renderSeedGraph();
 applyFilter();
@@ -2344,12 +2267,12 @@ applyFilter();
 # ────────────────────────────────────────────────────────────────────────
 
 
-def _parse_args(argv: list[str]) -> list[str]:
+def _parse_args(argv: list[str]) -> tuple[list[str], bool]:
     """
-    Parses the --changed <path> [<path> ...] argument.
+    Parses --changed <path> [<path> ...] and --full.
 
     Returns:
-        List of changed file paths (empty list if none).
+        (changed file paths, full flag) tuple.
     """
     changed: list[str] = []
     if "--changed" in argv:
@@ -2358,7 +2281,8 @@ def _parse_args(argv: list[str]) -> list[str]:
             if a.startswith("--"):
                 break
             changed.append(a)
-    return changed
+    full = "--full" in argv
+    return changed, full
 
 
 def main() -> None:
@@ -2376,7 +2300,7 @@ def main() -> None:
         sys.exit(1)
 
     # Parse CLI arguments
-    changed_paths = _parse_args(sys.argv[1:])
+    changed_paths, full = _parse_args(sys.argv[1:])
 
     # Load index.json
     with index_path.open(encoding="utf-8") as f:
@@ -2408,12 +2332,12 @@ def main() -> None:
     scratch_dir.mkdir(parents=True, exist_ok=True)
 
     # Generate Markdown report
-    md_text = _build_markdown(nodes, edges, ci, changed_paths, repo_root)
+    md_text = _build_markdown(nodes, edges, ci, changed_paths, repo_root, full=full)
     md_path = scratch_dir / "report.md"
     md_path.write_text(md_text, encoding="utf-8")
 
     # Generate HTML report
-    html_text = _build_html(nodes, edges, ci, changed_paths, repo_root)
+    html_text = _build_html(nodes, edges, ci, changed_paths, repo_root, full=full)
     html_path = scratch_dir / "report.html"
     html_path.write_text(html_text, encoding="utf-8")
 
@@ -2428,6 +2352,8 @@ def main() -> None:
     )
     if changed_paths:
         print("[report] --changed: " + str(changed_paths))
+    if full:
+        print("[report] --full: node explorer + seed graph embedded")
     print("[report] -> " + str(md_path))
     print("[report] -> " + str(html_path))
 
