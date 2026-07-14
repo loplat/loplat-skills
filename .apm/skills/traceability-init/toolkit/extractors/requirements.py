@@ -1,8 +1,8 @@
 """
-docs/requirements/prd.md 에서 Requirement 노드를 추출하는 추출기.
+Extractor that pulls Requirement nodes from docs/requirements/prd.md.
 
-추출 대상: `| REQ-NNN | 설명 | Must/Should/... | 출처 |` 형식의 Markdown 표 행.
-zero-pad 를 그대로 보존한다 (예: REQ-002, REQ-077, REQ-102).
+Extracted items: Markdown table rows in the `| REQ-NNN | description | Must/Should/... | source |` format.
+Zero-padding is preserved as-is (e.g. REQ-002, REQ-077, REQ-102).
 """
 
 from __future__ import annotations
@@ -14,8 +14,8 @@ from tools.traceability.config import get_config
 from tools.traceability.extractors import register
 from tools.traceability.model import TraceIndex, TraceNode
 
-# REQ 행 패턴: `| REQ-NNN | 설명 | 우선순위 | 출처 |`
-# 첫 번째 컬럼이 REQ-로 시작하는 행만 매칭
+# REQ row pattern: `| REQ-NNN | description | priority | source |`
+# Matches only rows whose first column starts with REQ-
 _ROW_RE = re.compile(
     r"^\|\s*(REQ-\d+)\s*\|\s*(.*?)\s*\|\s*([\w/]+)\s*\|",
     re.MULTILINE,
@@ -25,15 +25,15 @@ _ROW_RE = re.compile(
 @register("requirements")
 def extract(repo_root: Path, index: TraceIndex) -> None:
     """
-    PRD Markdown 표에서 Requirement 노드를 추출해 index 에 추가한다.
+    Extract Requirement nodes from the PRD Markdown table and add them to the index.
 
-    각 노드의 id 는 표 첫 번째 컬럼 값 그대로 사용 (zero-pad 보존).
-    attrs 에 priority 를 저장한다.
+    Each node's id uses the table's first column value as-is (zero-padding preserved).
+    priority is stored in attrs.
     """
     prd_rel_path = get_config(repo_root).path("requirements")
     prd_path = repo_root / prd_rel_path
     if not prd_path.exists():
-        return  # 파일이 없으면 조용히 건너뜀
+        return  # Silently skip if the file doesn't exist
 
     text = prd_path.read_text(encoding="utf-8")
     lines = text.splitlines()
@@ -43,15 +43,15 @@ def extract(repo_root: Path, index: TraceIndex) -> None:
         if not m:
             continue
 
-        req_id = m.group(1)  # 예: REQ-102
-        title_raw = m.group(2)  # 설명 (앞뒤 공백 제거됨)
-        priority = m.group(3)  # 예: Must, Should, Superseded
+        req_id = m.group(1)  # e.g. REQ-102
+        title_raw = m.group(2)  # description (surrounding whitespace stripped)
+        priority = m.group(3)  # e.g. Must, Should, Superseded
 
-        # 설명에서 스트라이크스루(~~) 마크다운 제거
+        # Strip Markdown strikethrough (~~) from the description
         title = re.sub(r"~~.*?~~", "", title_raw).strip()
-        # Markdown 링크 제거: [text](url) → text
+        # Strip Markdown links: [text](url) → text
         title = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", title)
-        # 긴 설명 잘라내기 (제목으로 사용하므로 120자 제한)
+        # Truncate long descriptions (limited to 120 chars since it's used as the title)
         if len(title) > 120:
             title = title[:120] + "…"
 

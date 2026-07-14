@@ -1,9 +1,10 @@
 """
-ios/App/AppUnitTests/**/*.swift 및 ios/App/AppUITests/**/*.swift 에서
-TestCase 노드와 validates 엣지를 추출한다.
+Extractor that pulls TestCase nodes and validates edges from
+ios/App/AppUnitTests/**/*.swift and ios/App/AppUITests/**/*.swift.
 
-- TestCase 노드: id = {repo 상대 경로}::{함수명}
-- validates 엣지: 테스트 함수 앞의 요구사항 trace 주석에 포함된 IOS-REQ ID 또는 UC ID
+- TestCase node: id = {repo-relative path}::{function name}
+- validates edge: the IOS-REQ ID or UC ID contained in the requirement trace
+  comment preceding the test function
 """
 
 from __future__ import annotations
@@ -24,9 +25,9 @@ _FUNC_TEST_RE = re.compile(r"^\s*func\s+(?:`([^`]+)`|([A-Za-z_][A-Za-z0-9_]*))\s
 
 def _extract_ios_req_ids(text: str) -> list[str]:
     """
-    주석 문자열에서 IOS-REQ ID를 추출한다.
+    Extract IOS-REQ IDs from a comment string.
 
-    IOS-REQ-038~041 같은 range 표기는 개별 ID로 확장한다.
+    Range notations such as IOS-REQ-038~041 are expanded into individual IDs.
     """
     req_ids: list[str] = []
     for match in _IOS_REQ_RE.finditer(text):
@@ -47,7 +48,7 @@ def _extract_ios_req_ids(text: str) -> list[str]:
 
 
 def _extract_uc_ids(text: str) -> list[str]:
-    """주석 문자열에서 checklist UseCase ID를 추출한다."""
+    """Extract checklist UseCase IDs from a comment string."""
     return _UC_RE.findall(text)
 
 
@@ -56,7 +57,7 @@ def _extract_trace_target_ids(text: str) -> list[str]:
 
 
 def _looks_like_test_attribute_continuation(stripped: str) -> bool:
-    """Swift attribute argument 줄이면 @Test 이후 func 탐색을 계속한다."""
+    """If it's a Swift attribute argument line, keep looking for func after @Test."""
     return (
         stripped.startswith("@")
         or stripped.startswith(".")
@@ -113,7 +114,7 @@ def _process_file(
         source = file_path.read_text(encoding="utf-8")
     except Exception as exc:  # noqa: BLE001
         print(
-            f"[ios_tests] 경고: {rel_path} 읽기 실패: {exc}",
+            f"[ios_tests] warning: failed to read {rel_path}: {exc}",
             file=sys.stderr,
         )
         return
@@ -129,6 +130,8 @@ def _process_file(
         stripped = line.strip()
 
         if stripped.startswith("//"):
+            # NOTE: "요구사항 trace:" is a functional marker literal matched against
+            # real Swift test comments — do not translate it.
             if "요구사항 trace:" in stripped:
                 pending_target_ids.extend(_extract_trace_target_ids(stripped))
                 collecting_trace = True
@@ -200,7 +203,7 @@ def _process_file(
             continue
 
         if stripped.startswith("@"):
-            # @MainActor 같은 Swift attribute 는 trace 주석과 @Test 사이에 올 수 있다.
+            # Swift attributes such as @MainActor can appear between the trace comment and @Test.
             continue
 
         if is_ui_test_file:
@@ -230,7 +233,8 @@ def _process_file(
 @register("ios_tests")
 def extract(repo_root: Path, index: TraceIndex) -> None:
     """
-    iOS Swift Testing 단위 테스트와 XCUITest UI 테스트에서 TestCase 노드와 validates 엣지를 추출한다.
+    Extract TestCase nodes and validates edges from iOS Swift Testing unit
+    tests and XCUITest UI tests.
     """
     swift_files: list[Path] = []
     for test_dir in get_config(repo_root).path_list("ios_test_dirs"):
@@ -245,6 +249,6 @@ def extract(repo_root: Path, index: TraceIndex) -> None:
         except Exception as exc:  # noqa: BLE001
             rel = str(file_path.relative_to(repo_root))
             print(
-                f"[ios_tests] 경고: {rel} 처리 실패: {exc}",
+                f"[ios_tests] warning: failed to process {rel}: {exc}",
                 file=sys.stderr,
             )

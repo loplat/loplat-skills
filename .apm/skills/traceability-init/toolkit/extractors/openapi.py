@@ -1,8 +1,8 @@
 """
-docs/api/openapi.json 에서 ApiOperation 노드를 추출하는 추출기.
+Extractor that pulls ApiOperation nodes from docs/api/openapi.json.
 
-추출 대상: paths[path][method].operationId
-정확히 44개 operation 을 추출한다.
+Extracted items: paths[path][method].operationId
+Extracts exactly 44 operations.
 """
 
 from __future__ import annotations
@@ -15,28 +15,28 @@ from tools.traceability.config import get_config
 from tools.traceability.extractors import register
 from tools.traceability.model import TraceIndex, TraceNode
 
-# 처리할 HTTP 메서드 집합
+# Set of HTTP methods to process
 _HTTP_METHODS = {"get", "post", "put", "delete", "patch", "options", "head"}
 
 
 @register("openapi")
 def extract(repo_root: Path, index: TraceIndex) -> None:
     """
-    OpenAPI JSON 에서 ApiOperation 노드를 추출해 index 에 추가한다.
+    Extract ApiOperation nodes from the OpenAPI JSON and add them to the index.
 
-    각 노드:
+    Each node:
     - id: operationId
     - attrs: path, method, tags
 
     Args:
-        repo_root: 리포지토리 루트 경로
-        index: 트레이서빌리티 인덱스
+        repo_root: repository root path
+        index: traceability index
     """
     openapi_rel_path = get_config(repo_root).path("openapi")
     openapi_path = repo_root / openapi_rel_path
     if not openapi_path.exists():
         print(
-            f"[openapi] 경고: {openapi_rel_path} 파일 없음 — 건너뜀",
+            f"[openapi] warning: {openapi_rel_path} not found — skipping",
             file=sys.stderr,
         )
         return
@@ -45,16 +45,16 @@ def extract(repo_root: Path, index: TraceIndex) -> None:
         data = json.loads(openapi_path.read_text(encoding="utf-8"))
     except Exception as exc:  # noqa: BLE001
         print(
-            f"[openapi] 경고: {openapi_rel_path} 파싱 실패: {exc}",
+            f"[openapi] warning: failed to parse {openapi_rel_path}: {exc}",
             file=sys.stderr,
         )
         return
 
     paths = data.get("paths", {})
-    # 결정성 보장: path 이름 기준 정렬
+    # Ensure determinism: sort by path name
     for path in sorted(paths.keys()):
         methods = paths[path]
-        # 결정성 보장: method 이름 기준 정렬
+        # Ensure determinism: sort by method name
         for method in sorted(methods.keys()):
             if method.lower() not in _HTTP_METHODS:
                 continue
@@ -65,7 +65,7 @@ def extract(repo_root: Path, index: TraceIndex) -> None:
             operation_id = op_info.get("operationId")
             if not operation_id:
                 print(
-                    f"[openapi] 경고: {path} {method} 에 operationId 없음 — 건너뜀",
+                    f"[openapi] warning: {path} {method} has no operationId — skipping",
                     file=sys.stderr,
                 )
                 continue

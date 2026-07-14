@@ -1,101 +1,128 @@
 ---
 name: traceability-init
-description: 개발 프로젝트를 분석해 traceability 온톨로지 기반(docs/ontology + tools/traceability)을 구성한다. 사용자가 "온톨로지 구성", "traceability 도입/초기화", "정합성 체크 셋업", "이 프로젝트에 traceability 적용", "프로젝트 분석해서 온톨로지 만들어줘"를 요청하거나, traceability-check가 미구성 repo를 만났을 때 사용한다. 인벤토리 스캔→프로파일 판정→온톨로지 스캐폴딩→툴킷 vendoring→verify 통과까지 진행한다.
+description: Analyze a software project and bootstrap a traceability ontology (docs/ontology + tools/traceability). Use when the user asks to "set up traceability", "bootstrap the ontology", "apply traceability to this project", "build an ontology from this repo", or when traceability-check reports an unconfigured repo. Runs inventory scan, profile decision, ontology scaffolding, toolkit vendoring, agent-driven ontology authoring, and a verify loop until it passes.
 ---
 
-# Traceability Init (프로젝트 분석 + 온톨로지 부트스트랩)
+# Traceability Init (project analysis + ontology bootstrap)
 
-문서 자산(PRD/ADR/OpenAPI/스펙)이 있는 프로젝트에 traceability 정합성 체크 기반을 구성한다.
+Bootstraps the traceability consistency gate for a project that has *any* documentation or code assets — regardless of format. Deterministic extractors handle standard formats (ADR frontmatter, OpenAPI JSON, Mermaid sequences); everything they cannot parse — ADRs written as `# ADR-001:` headings, a Markdown API spec, a prose design note, a decision recorded only in a code comment — is captured by an agent into a committed `ontology.yml`. This is what makes the skill resource-agnostic.
 
-**이 스킬 디렉토리**(이 SKILL.md가 있는 디렉토리)에 실행 자산이 함께 배포된다:
+This skill's directory ships the execution assets alongside this SKILL.md:
 
-- `references/traceability-ontology.md` — 규격 정본. **절차 시작 전 반드시 Read**한다. 노드/엣지 타입, 프로파일, trace-config.yml 규격, vendoring 절차가 모두 여기에 있다.
-- `scripts/inventory.py` — 1단계 인벤토리 스캔 스크립트.
-- `toolkit/` — vendoring용 정본 툴킷 (config-driven).
+- `references/traceability-ontology.md` — the spec of record. **Read it before starting.** Node/edge types, profiles, the trace-config.yml and ontology.yml schemas, and the vendoring procedure all live there.
+- `scripts/inventory.py` — the step-1 inventory scanner.
+- `toolkit/` — the config-driven toolkit to vendor (includes the `agent_ontology` extractor).
 
-## 사용 시점
+## When to use
 
-- 새 프로젝트 또는 기존 프로젝트에 정합성 체크(traceability)를 도입할 때.
-- `traceability-check`가 `tools/traceability/` 또는 `docs/ontology/` 부재를 보고했을 때.
-- **사용하지 않는 경우**: 이미 구성된 repo의 검증(→ `traceability-check`), 문서 자산이 전무한 프로젝트에 억지 도입(→ 2단계에서 보류 판정).
+- Introducing traceability to a new or existing project.
+- When `traceability-check` reports that `tools/traceability/` or `docs/ontology/` is missing.
+- **Do not use** for: verifying an already-configured repo (use `traceability-check`), or a project with no documentation and no code worth tracing (step 2 returns `not-ready`).
 
-## 절차
+## Procedure
 
-### 1. 인벤토리 스캔
+### 1. Inventory scan
 
 ```sh
-python3 <이 스킬 디렉토리>/scripts/inventory.py [repo_root]
+python3 <this skill dir>/scripts/inventory.py [repo_root]
 ```
 
-repo root는 인자를 생략하면 스크립트가 `git rev-parse`로 확정한다(worktree 안전). 스캔은 디렉토리 구조를 가정하지 않는다 — ADR/specs/ontology 디렉토리와 PRD/OpenAPI 파일을 트리 탐색(depth 4)으로 이름 기반 탐지한다. 출력 JSON의 `suggested_profile`을 확인한다.
+Repo root is resolved via `git rev-parse` when the argument is omitted (worktree-safe). The scan does not assume a directory layout — it finds ADR/specs/ontology directories and PRD/OpenAPI files by tree-walking (depth 4) on names. Read the `suggested_profile` from the JSON output.
 
-### 2. 프로파일 판정 및 사용자 확인
+### 2. Profile decision and user confirmation
 
-- `already-initialized` → 이 스킬 종료, `traceability-check`로 안내.
-- `not-ready` → **도입을 보류**하고 이유를 보고한다. 선행 조건(ADR 디렉토리, PRD 문서 체계)을 제안하되 사용자 요청 없이 문서를 대량 생성하지 않는다.
-- `docs-only` / `backend-api` / `full-stack` → 활성화할 노드 타입·extractor 목록을 제시하고 사용자 확인을 받는다. 스캔이 놓친 문서(비표준 확장자·명명)가 있는지 이때 함께 묻는다.
+- `already-initialized` → stop, hand off to `traceability-check`.
+- `not-ready` → returned **only when there are neither decision/requirement docs nor meaningful code**. Report why and suggest prerequisites; do not mass-generate documents without a request.
+- `docs-only` / `backend-api` / `full-stack` → present the node types and extractors to activate, and confirm. **Format does not gate adoption**: even if the ADRs/API specs are in a non-standard format, proceed — the agent step (5) captures them. Ask here whether the scan missed any assets (unusual names/extensions, decisions living in code comments).
 
-### 3. docs/ontology/ 스캐폴딩
+### 3. Scaffold docs/ontology/
 
-reference의 규격에 따라 생성한다:
+Per the reference spec, create:
 
-- `trace-config.yml` — 1단계에서 실제 탐지된 경로로 채운다. **툴킷이 이 파일을 직접 읽는다** — 4단계에서 코드가 아니라 이 config로 적응한다.
-- `schema.md` — 활성 노드/엣지 타입만 남긴 subset. reference의 노드 타입 카탈로그를 기반으로 프로젝트 어휘로 서술한다.
-- `conventions.md` — canonical id regex, marker 문법(이 프로젝트의 언어에 맞게), 파일 배치 규약.
-- `manual-edges.yml`, `seed-traces.yml`, `api-exclusions.yml` — 빈 stub (주석으로 형식 예시 1건씩).
+- `trace-config.yml` — filled with the paths actually detected in step 1. The toolkit reads this directly (config-driven).
+- `schema.md` — a subset describing only the active node/edge types, in the project's vocabulary.
+- `conventions.md` — canonical id regexes, marker syntax for this project's languages, file-placement rules.
+- `manual-edges.yml`, `seed-traces.yml`, `api-exclusions.yml` — empty stubs (one format example each, commented).
+- `ontology.yml` — the agent-authored node/edge file (populated in step 5).
 
-### 4. 툴킷 vendoring + config 작성
+### 4. Vendor the toolkit + write config
 
-툴킷은 config-driven이다. **경로 상수를 직접 수정하지 않고 `trace-config.yml`만 작성**한다(reference 문서의 "vendoring 절차" 참조).
+The toolkit is config-driven. **Do not edit path constants in code — write `trace-config.yml` only** (see the reference's "vendoring procedure").
 
-1. 이 스킬 디렉토리의 `toolkit/`을 대상 repo의 `tools/traceability/`로 복사한다(`__pycache__` 제외).
-2. `trace-config.yml`의 `paths`를 대상 프로젝트 실제 경로로 채운다. 기본값과 다른 키만 명시하면 된다 — 미지정 키는 기본값으로 폴백한다.
-3. 미사용 문서 타입은 `extractors`에서 `false`로 둔다(소스 파일이 없으면 자동 skip되지만 명시가 의도를 문서화한다). PRD 어휘가 다르면 `priority.must`를 조정한다.
-4. **문서 포맷 자체가 다를 때만** 해당 extractor의 regex를 수정한다. 경로만 다르고 포맷이 같으면 코드 수정은 불필요하다.
+1. Copy this skill's `toolkit/` to the target repo's `tools/traceability/` (exclude `__pycache__`).
+2. Fill `trace-config.yml`'s `paths` with the target project's real paths. Only keys that differ from the defaults need to be listed; unspecified keys fall back to defaults.
+3. Set unused document types to `false` under `extractors` (a missing source is auto-skipped, but an explicit `false` documents intent). Adjust `priority.must` if the PRD uses a different vocabulary.
+4. **Only when the document format itself differs** (e.g. a different REQ table structure) edit that extractor's regex. If only the path differs and the format matches, no code change is needed.
 
-### 5. 기존 문서에 canonical id 부여 (최소 침습)
+### 5. Author ontology.yml (agent semantic extraction) — the resource-agnostic step
 
-- ADR 파일명·헤더에 `ADR-NNNN`이 없으면 부여한다. 기존 번호 체계가 있으면 **그 체계를 유지**하고 conventions.md의 regex를 거기에 맞춘다 — 문서를 규약에 맞추는 게 아니라 규약을 문서에 맞춘다.
-- PRD에 REQ id 표가 없으면 기존 요구사항 목록에 id 열만 추가한다. 내용 재작성 금지.
-- 테스트 marker는 이 단계에서 넣지 않는다(coverage는 hard gate가 아님). conventions.md에 문법만 정의해 두면 이후 개발에서 점진 적용된다.
+This is where format-independence happens. For every asset the deterministic extractors cannot parse, read it and record the nodes and edges explicitly.
 
-### 6. 검증 루프 (최대 3회)
+1. Run `python3 tools/traceability/build_index.py` once and inspect the node counts per extractor. Any decision/requirement/API doc that exists but yields 0 nodes is a gap to fill here.
+2. Read those assets directly — ADRs in any heading style, Markdown/prose API specs, design notes, even decisions embedded in code comments — and decide which nodes (Requirement, ADR, ApiOperation, …) exist and how they relate to already-extracted `CodeSymbol`/`TestCase` nodes.
+3. Record them in `docs/ontology/ontology.yml` using the schema in the reference. Edge `source`/`target` must resolve to real node ids — use the exact ids `build_index` produced for code symbols (`path/file.py:symbol`) and tests. Unresolved ids surface as `broken_reference` in verify, which is the built-in correctness check on your authoring.
+4. Keep `ontology.yml` committed. Extraction is done once by the agent when authoring a change; CI re-verifies the committed graph deterministically, with no model in the loop.
+
+Do not duplicate what a deterministic extractor already captures — `ontology.yml` is for what they miss, not a parallel copy.
+
+### 6. Assign canonical ids (minimally invasive)
+
+- If ADR files lack a canonical id, add one. If an existing numbering scheme is present, **keep it** and match `conventions.md`'s regex to it — fit the convention to the docs, not the docs to the convention. (You may instead reference the ADR from `ontology.yml` without touching the file.)
+- If the PRD has no REQ-id table, add an id column to the existing list. Do not rewrite content.
+- Do not add test markers here (coverage is not a hard gate). Define the syntax in `conventions.md` so later development can adopt it incrementally.
+
+### 7. Verify loop (max 3 iterations)
 
 ```sh
 python3 tools/traceability/build_index.py && python3 tools/traceability/verify.py
 ```
 
-- exit 0이 될 때까지 결함을 수정한다. 수정 위치는 source 문서·trace-config·manual edge이며 생성된 index가 아니다.
-- **3회 초과 시 중단**하고 남은 결함 목록(`kind`, `subject`, `location`)을 정리해 사용자에게 에스컬레이션한다. 반복 초과는 문서 자산이 프로파일 대비 미성숙하다는 신호다 — 프로파일 하향(`backend-api`→`docs-only`)을 함께 제안한다.
-- exit 2(환경 오류)는 결함 수정 대상이 아니다. PyYAML 등 의존성을 그 repo의 Python 환경 규약(uv/poetry/venv)으로 해결한다.
+- Fix defects until exit 0. Fix at the source (docs, trace-config, manual/agent edges), never in the generated index.
+- **After 3 iterations, stop** and escalate the remaining defects (`kind`, `subject`, `location`). Exceeding the loop signals the assets are immature for the profile — propose lowering it (`backend-api` → `docs-only`).
+- exit 2 (environment error) is not a defect to fix — resolve the dependency (PyYAML, etc.) via the repo's Python convention (uv/poetry/venv).
 
-### 7. repo 지침 등록
+### 8. Register in repo instructions
 
-- repo의 `AGENTS.md`(없으면 `CLAUDE.md`)에 정합성 체크 섹션을 추가한다: 실행 명령 3개, exit code 의미, `docs/ontology/` 참조. **이 섹션이 스킬 미지원 런타임(Cursor 등)에서의 진입점이므로 생략하지 않는다.**
-- `scratch/traceability/`가 `.gitignore`에 있는지 확인하고 없으면 추가한다.
-- CI 등록(cloudbuild/GitHub Actions에 `verify.py` step)은 제안만 하고 사용자 승인 후 진행한다.
+- Add a consistency-check section to **every instruction file the team's runtimes actually load**: `AGENTS.md` (Codex, Antigravity, Gemini, Cursor) **and** `CLAUDE.md` (Claude Code does **not** auto-load AGENTS.md — a section only there is invisible to it; measured in an A/B eval where agents never discovered the graph until CLAUDE.md carried the pointer). Keep one file canonical and have the other reference it. Include: the three commands, exit-code meanings, a pointer to `docs/ontology/`, and where the prebuilt graph lives (`scratch/traceability/index.json`) with a query example — agents should query it with a script, not read the raw JSON wholesale.
+- Ensure `scratch/traceability/` is gitignored.
+- Propose CI registration (a `verify.py` step in cloudbuild/GitHub Actions) but only apply it with user approval.
+
+## Multi-repo (umbrella) mode
+
+Use when several repos of one service family are gathered under a single directory and the questions cross repo boundaries ("which services consume this shared type package?", "what breaks if this topic changes?"). Cross-repo references rarely appear in any single repo's prose docs, and grep cannot see the neighboring repo — this is where the graph has unique value that single-repo mode measurably lacks.
+
+Differences from the single-repo procedure (full conventions: reference's "Umbrella (multi-repo) mode" section):
+
+1. The umbrella directory is the repo root: place `tools/traceability/` and `docs/ontology/` at its top. It usually is not a git repo — verify runs as a scheduled observation job (cron: `build_index && verify`) rather than a CI gate, unless you make it a meta-repo.
+2. **Disable all deterministic extractors** in trace-config.yml. Per-repo layouts and ADR formats vary, and single-string path keys (`adr_dir`, `openapi`) cannot span repos — the graph is authored entirely via `ontology.yml`.
+3. **Namespace every id with a repo prefix** (`xb:ADR-001`, `dmp:ADR-001`): ADR numbering restarts per repo, and the index's keep-first policy silently drops colliding ids.
+4. Model repos as `Service` nodes and shared integration points (Pub/Sub topics, shared DB tables, type packages) as `Resource` nodes; add `ext:` placeholder Service nodes for dependencies outside the umbrella.
+5. **Pin one canonical worktree per repo** (`{repo}/main/` or `master`/`develop`) in node sources; never index multiple worktrees of the same repo (duplicate nodes) or trash/backup copies.
+6. State evidence strength honestly: an edge whose binding lives in infra (e.g. a Pub/Sub subscription defined in deployment config, not code) must say so in `evidence`.
 
 ## Rationalizations
 
-| 핑계 | 반박 |
+| Excuse | Rebuttal |
 |---|---|
-| "문서가 없으니 PRD/ADR을 먼저 만들어주고 온톨로지도 깔자" | not-ready 판정은 보류가 정답. 내용 없는 문서 뼈대 위의 온톨로지는 verify가 영원히 빈 통과만 한다. |
-| "extractor 코드를 직접 고쳐 경로를 박겠다" | 툴킷은 config-driven이다. 코드 상수를 고치면 다음 vendoring에서 어긋난다. `trace-config.yml`에만 쓴다. |
-| "verify exit 2인데 일단 온톨로지 문서는 만들어졌으니 완료 보고" | exit 0 실측 전에는 미완료다. 환경 오류는 fallback으로 복구한다. |
-| "기존 ADR 번호가 규약과 달라서 전부 rename" | 규약을 문서에 맞춘다. 대량 rename은 링크를 깨는 파괴적 변경이다. |
+| "The ADRs aren't in the standard format, so this project is not-ready." | Format never gates adoption. not-ready means no assets at all. Non-standard assets are exactly what step 5 exists for. |
+| "I'll edit the extractor code to match this project's format." | The toolkit is config-driven; paths go in trace-config.yml. For a genuinely different *format*, prefer capturing nodes in ontology.yml over rewriting regex. |
+| "build_index produced nodes, so we're done." | Nodes without edges trace nothing and verify passes vacuously. Check edge count; fill relationships in ontology.yml. |
+| "verify exit 2 but the ontology docs got created, so I'll report done." | Not done until exit 0 is measured. Recover the environment error. |
+| "The existing ADR numbers differ from the convention, so I'll rename them all." | Fit the convention to the docs. Mass rename is a destructive, link-breaking change. |
 
 ## Red Flags
 
-- verify 결함을 고치겠다며 `scratch/traceability/index.json`을 편집하고 있다 — 산출물 수정은 무의미, source로 돌아가라.
-- 3회 루프를 넘겼는데 프로파일 재검토 없이 4회째 수정 중이다.
-- 경로를 바꾸겠다며 extractor 코드를 편집하고 있다 — 툴킷은 config-driven이다. 경로는 `trace-config.yml`에서만 바꾼다.
+- Editing `scratch/traceability/index.json` to fix a defect — the generated index is an output; go back to the source.
+- A 4th verify iteration without re-examining the profile.
+- Editing extractor code to change a path — paths belong in trace-config.yml.
+- A repo full of ADRs/API docs ends with **0 edges** — the agent step (5) was skipped; the graph traces nothing.
 
 ## Verification
 
-- [ ] `python3 tools/traceability/build_index.py && python3 tools/traceability/verify.py` exit 0 실측
-- [ ] `docs/ontology/` 6종 파일 존재 (trace-config.yml, schema.md, conventions.md, yml stub 3종)
-- [ ] `trace-config.yml`의 `paths`가 대상 프로젝트 실제 경로를 가리킴 (build_index 출력의 노드 수로 교차 확인 — 0이면 경로 오류)
-- [ ] 비활성 extractor를 `extractors: {name: false}`로 명시했거나, build_index의 `disabled extractors:` 출력으로 확인
-- [ ] extractor 코드 상수를 직접 편집하지 않았다 (포맷 차이로 regex를 고친 경우가 아니면)
-- [ ] repo 지침(AGENTS.md/CLAUDE.md)에 정합성 체크 섹션 존재
-- [ ] `scratch/traceability/` gitignore 처리 확인
+- [ ] `python3 tools/traceability/build_index.py && python3 tools/traceability/verify.py` measured at exit 0
+- [ ] `docs/ontology/` has the expected files (trace-config.yml, schema.md, conventions.md, ontology.yml, the three yml stubs)
+- [ ] `trace-config.yml`'s `paths` point at the target project's real paths (cross-check via build_index node counts — 0 means a path is wrong)
+- [ ] Edge count > 0, and decision/requirement/API nodes are present (not just code/test nodes)
+- [ ] Did not edit extractor code constants (unless the document format genuinely differed)
+- [ ] The repo instructions (AGENTS.md/CLAUDE.md) have a consistency-check section
+- [ ] `scratch/traceability/` is gitignored

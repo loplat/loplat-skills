@@ -1,13 +1,13 @@
 """
-docs/specs/*.md 에서 SpecSection, SequenceDiagram, SequenceStep 노드와
-step_calls, references 엣지를 추출하는 추출기.
+Extractor that pulls SpecSection, SequenceDiagram, and SequenceStep nodes,
+plus step_calls and references edges, from docs/specs/*.md.
 
-대상 파일: docs/specs/*.md (정렬)
-- SpecSection: ## / ### 헤딩 단위
-- SequenceDiagram: ```mermaid sequenceDiagram``` 블록 (`*sequence*.md`)
-- SequenceStep: 블록 내 메시지/Note 단위 (`*sequence*.md`)
-- edge step_calls: 메시지 텍스트에 METHOD /path 가 있고 openapi path 와 일치할 때
-- edge references: SpecSection 본문 또는 Note/메시지에 REQ-NNN / ADR-NNNN 이 있을 때
+Target files: docs/specs/*.md (sorted)
+- SpecSection: each ## / ### heading unit
+- SequenceDiagram: ```mermaid sequenceDiagram``` blocks (in `*sequence*.md`)
+- SequenceStep: each message/Note unit inside a block (in `*sequence*.md`)
+- step_calls edge: when a message text contains METHOD /path matching an openapi path
+- references edge: when a SpecSection body or a Note/message contains REQ-NNN / ADR-NNNN
 """
 
 from __future__ import annotations
@@ -20,30 +20,30 @@ from tools.traceability.config import get_config
 from tools.traceability.extractors import register
 from tools.traceability.model import TraceEdge, TraceIndex, TraceNode
 
-# 파싱 정규식
+# Parsing regexes
 _HEADING_RE = re.compile(r"^(#{2,3})\s+(.+)$")
 _MERMAID_OPEN_RE = re.compile(r"^```mermaid\s*$")
 _MERMAID_CLOSE_RE = re.compile(r"^```\s*$")
 _SEQ_DIAGRAM_RE = re.compile(r"^\s*sequenceDiagram\s*$")
 
-# 시퀀스 메시지 패턴: A->>B: 텍스트 또는 A-->>B: 텍스트
+# Sequence message pattern: A->>B: text or A-->>B: text
 _MSG_RE = re.compile(r"^\s*(\w[\w\s]*?)(?:->>|-->|->|-->>)(\w[\w\s]*?):\s*(.+)$")
-# Note 패턴: Note over A: 텍스트 / Note right of A: 텍스트
+# Note pattern: Note over A: text / Note right of A: text
 _NOTE_RE = re.compile(
     r"^\s*Note\s+(?:over|right\s+of|left\s+of)\s+([\w,\s]+?):\s*(.+)$",
     re.IGNORECASE,
 )
 
-# HTTP 메서드 + path 패턴 (예: POST /api/v1/...)
+# HTTP method + path pattern (e.g. POST /api/v1/...)
 _HTTP_CALL_RE = re.compile(r"\b(GET|POST|PUT|DELETE|PATCH|OPTIONS|HEAD)\s+(/[^\s,;\"\']+)")
 
-# REQ/ADR 참조 패턴
+# REQ/ADR reference pattern
 _REQ_REF_RE = re.compile(r"\bREQ-(\d+)\b")
 _ADR_REF_RE = re.compile(r"\bADR-(\d{4})\b")
 
 
 def _slug(text: str) -> str:
-    """헤딩 텍스트를 anchor slug 로 변환한다."""
+    """Convert a heading text into an anchor slug."""
     s = text.lower().strip()
     s = re.sub(r"[^\w\s-]", "", s)
     s = re.sub(r"\s+", "-", s)
@@ -51,7 +51,7 @@ def _slug(text: str) -> str:
 
 
 def _collect_target_files(repo_root: Path) -> list[Path]:
-    """docs/specs/*.md 파일 목록을 수집하고 정렬해 반환한다."""
+    """Collect and sort the docs/specs/*.md file list."""
     spec_dir = repo_root / get_config(repo_root).path("specs_dir")
     if not spec_dir.exists():
         return []
@@ -66,14 +66,14 @@ def _extract_file(
     openapi_lookup: dict[tuple[str, str], str],
 ) -> None:
     """
-    단일 spec 파일을 파싱해 SpecSection, SequenceDiagram, SequenceStep 노드와
-    관련 엣지를 index 에 추가한다.
+    Parse a single spec file and add its SpecSection, SequenceDiagram, and
+    SequenceStep nodes, along with related edges, to the index.
 
     Args:
-        repo_root: 리포지토리 루트 경로
-        file_path: 파싱할 파일 절대 경로
-        index: 트레이서빌리티 인덱스
-        openapi_lookup: (normalized_path, method) → operationId 매핑
+        repo_root: repository root path
+        file_path: absolute path of the file to parse
+        index: traceability index
+        openapi_lookup: (normalized_path, method) → operationId mapping
     """
     rel_path = str(file_path.relative_to(repo_root))
     stem = file_path.stem
@@ -82,7 +82,7 @@ def _extract_file(
         text = file_path.read_text(encoding="utf-8")
     except Exception as exc:  # noqa: BLE001
         print(
-            f"[sequence] 경고: {rel_path} 읽기 실패: {exc}",
+            f"[sequence] warning: failed to read {rel_path}: {exc}",
             file=sys.stderr,
         )
         return
@@ -90,7 +90,7 @@ def _extract_file(
     lines = text.splitlines()
     parse_sequences = "sequence" in file_path.name
 
-    # ── SpecSection 노드 추출 (## / ### 헤딩) + 본문 REQ/ADR 참조 ─────────
+    # ── Extract SpecSection nodes (## / ### headings) + REQ/ADR references in the body ──
     current_section_id: str | None = None
     in_fence = False
     for lineno, line in enumerate(lines, start=1):
@@ -143,18 +143,18 @@ def _extract_file(
     if not parse_sequences:
         return
 
-    # ── SequenceDiagram, SequenceStep 노드 추출 ────────────────────────────
-    seq_block_idx = 0  # 파일 내 sequenceDiagram 블록 순번 (0-based → 1-based)
+    # ── Extract SequenceDiagram and SequenceStep nodes ──────────────────────
+    seq_block_idx = 0  # sequenceDiagram block index within the file (0-based → 1-based)
     i = 0
     while i < len(lines):
         line = lines[i]
 
-        # ```mermaid 블록 시작 감지
+        # Detect the start of a ```mermaid block
         if not _MERMAID_OPEN_RE.match(line):
             i += 1
             continue
 
-        # ```mermaid 다음 줄이 sequenceDiagram 인지 확인
+        # Check whether the line after ```mermaid is sequenceDiagram
         j = i + 1
         if j >= len(lines):
             i += 1
@@ -164,7 +164,7 @@ def _extract_file(
             i += 1
             continue
 
-        # sequenceDiagram 블록 발견
+        # Found a sequenceDiagram block
         seq_block_idx += 1
         seq_id = f"{stem}#seq-{seq_block_idx}"
         block_start_lineno = i + 1  # 1-based
@@ -179,13 +179,13 @@ def _extract_file(
         )
         index.add_node(node)
 
-        # 블록 내용 파싱 (``` 닫히는 줄까지)
+        # Parse the block contents (until the closing ``` line)
         step_idx = 0
         k = j + 1
         while k < len(lines):
             block_line = lines[k]
 
-            # 블록 종료
+            # End of block
             if _MERMAID_CLOSE_RE.match(block_line):
                 break
 
@@ -194,7 +194,7 @@ def _extract_file(
                 k += 1
                 continue
 
-            # Note 또는 메시지 라인 파싱
+            # Parse a Note or message line
             from_participant: str | None = None
             to_participant: str | None = None
             is_step = False
@@ -228,7 +228,7 @@ def _extract_file(
                     "deactivate",
                 )
             ):
-                # 기타 텍스트 라인은 건너뜀
+                # Skip any other text line
                 pass
 
             if is_step:
@@ -249,11 +249,11 @@ def _extract_file(
                 )
                 index.add_node(step_node)
 
-                # step_calls 엣지: HTTP METHOD /path 매칭
+                # step_calls edge: match HTTP METHOD /path
                 for http_m in _HTTP_CALL_RE.finditer(raw_text):
                     method = http_m.group(1).upper()
                     path = http_m.group(2)
-                    # 경로 정규화: /api/v1 prefix 처리
+                    # Normalize the path: handle the /api/v1 prefix
                     normalized = _normalize_path(path)
                     op_id = openapi_lookup.get((normalized, method))
                     if op_id:
@@ -266,7 +266,7 @@ def _extract_file(
                         )
                         index.add_edge(edge)
 
-                # references 엣지: REQ-NNN / ADR-NNNN
+                # references edge: REQ-NNN / ADR-NNNN
                 for req_m in _REQ_REF_RE.finditer(raw_text):
                     edge = TraceEdge(
                         type="references",
@@ -289,8 +289,8 @@ def _extract_file(
 
             k += 1
 
-        # Note 라인도 SequenceDiagram 노드에서 references 엣지 생성
-        # (블록 내 텍스트 전체 스캔)
+        # Also generate references edges for Note lines from the SequenceDiagram node
+        # (scan the whole block text)
         block_text = "\n".join(lines[j:k])
         for req_m in _REQ_REF_RE.finditer(block_text):
             edge = TraceEdge(
@@ -317,31 +317,31 @@ def _extract_file(
 
 def _normalize_path(path: str) -> str:
     """
-    시퀀스 다이어그램 메시지의 path 를 OpenAPI paths 키 형식으로 정규화한다.
+    Normalize a sequence diagram message's path into the OpenAPI paths key format.
 
-    {deviceId} 와 {device_id} 같은 path parameter 이름 차이로
-    인한 false mismatch 를 방지하기 위해 모든 {…} 를 {} 로 치환한다.
-    verify.py 의 _normalize_path 와 동일한 동작을 보장한다.
+    Replace every {…} with {} to prevent false mismatches caused by path
+    parameter name differences such as {deviceId} vs {device_id}.
+    Guarantees the same behavior as verify.py's _normalize_path.
 
-    예: /api/v1/devices/{deviceId}/push-tokens
-         → /api/v1/devices/{}/push-tokens
+    Example: /api/v1/devices/{deviceId}/push-tokens
+             → /api/v1/devices/{}/push-tokens
     """
-    # 쿼리스트링 제거
+    # Strip the query string
     path = path.split("?")[0]
-    # 마지막 슬래시 제거
+    # Strip the trailing slash
     path = path.rstrip("/")
-    # path parameter placeholder 이름 제거: {deviceId} → {}
+    # Strip path parameter placeholder names: {deviceId} → {}
     path = re.sub(r"\{[^}]+\}", "{}", path)
     return path
 
 
 def _build_openapi_lookup(repo_root: Path) -> dict[tuple[str, str], str]:
     """
-    openapi.json 에서 (normalized_path, method) → operationId 매핑을 생성한다.
-    extractors 간 의존성 없이 직접 파싱.
+    Build a (normalized_path, method) → operationId mapping from openapi.json.
+    Parsed directly to avoid a dependency on other extractors.
 
-    양측 path 를 _normalize_path 와 동일한 규칙으로 정규화해
-    {deviceId} vs {device_id} 같은 이름 차이를 흡수한다.
+    Both sides' paths are normalized with the same rule as _normalize_path
+    to absorb name differences such as {deviceId} vs {device_id}.
     """
     import json as _json
 
@@ -365,7 +365,7 @@ def _build_openapi_lookup(repo_root: Path) -> dict[tuple[str, str], str]:
                 continue
             op_id = op_info.get("operationId")
             if op_id:
-                # OpenAPI 쪽도 동일한 정규화 적용 (양측 일치 보장)
+                # Apply the same normalization to the OpenAPI side (guarantees both sides match)
                 normalized = _normalize_path(path)
                 lookup[(normalized, method.upper())] = op_id
 
@@ -375,23 +375,23 @@ def _build_openapi_lookup(repo_root: Path) -> dict[tuple[str, str], str]:
 @register("sequence")
 def extract(repo_root: Path, index: TraceIndex) -> None:
     """
-    시퀀스 다이어그램 spec 파일들에서 SpecSection, SequenceDiagram,
-    SequenceStep 노드와 step_calls, references 엣지를 추출한다.
+    Extract SpecSection, SequenceDiagram, and SequenceStep nodes, plus
+    step_calls and references edges, from sequence diagram spec files.
 
     Args:
-        repo_root: 리포지토리 루트 경로
-        index: 트레이서빌리티 인덱스
+        repo_root: repository root path
+        index: traceability index
     """
     files = _collect_target_files(repo_root)
     if not files:
         print(
-            f"[sequence] 경고: {get_config(repo_root).path('specs_dir')} 에서 "
-            "대상 파일 없음 — 건너뜀",
+            f"[sequence] warning: no target files found under "
+            f"{get_config(repo_root).path('specs_dir')} — skipping",
             file=sys.stderr,
         )
         return
 
-    # OpenAPI 경로 → operationId 매핑 (step_calls 엣지 생성용)
+    # OpenAPI path → operationId mapping (used to create step_calls edges)
     openapi_lookup = _build_openapi_lookup(repo_root)
 
     for file_path in files:
@@ -399,6 +399,6 @@ def extract(repo_root: Path, index: TraceIndex) -> None:
             _extract_file(repo_root, file_path, index, openapi_lookup)
         except Exception as exc:  # noqa: BLE001
             print(
-                f"[sequence] 경고: {file_path.name} 처리 실패: {exc}",
+                f"[sequence] warning: failed to process {file_path.name}: {exc}",
                 file=sys.stderr,
             )

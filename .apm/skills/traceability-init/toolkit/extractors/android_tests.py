@@ -1,8 +1,10 @@
 """
-android/app/src/test/**/*.kt (및 androidTest) 에서 TestCase 노드와 validates 엣지를 추출한다.
+Extractor that pulls TestCase nodes and validates edges from
+android/app/src/test/**/*.kt (and androidTest).
 
-- TestCase 노드: id = {repo 상대 경로}::{함수명}
-- validates 엣지: @Test 직전 주석의 UC ID (// UC-10-N-06: 설명)
+- TestCase node: id = {repo-relative path}::{function name}
+- validates edge: the UC ID from the comment immediately preceding @Test
+  (// UC-10-N-06: description)
 """
 
 from __future__ import annotations
@@ -30,7 +32,7 @@ def _process_file(
         source = file_path.read_text(encoding="utf-8")
     except Exception as exc:  # noqa: BLE001
         print(
-            f"[android_tests] 경고: {rel_path} 읽기 실패: {exc}",
+            f"[android_tests] warning: failed to read {rel_path}: {exc}",
             file=sys.stderr,
         )
         return
@@ -90,7 +92,7 @@ def _process_file(
 @register("android_tests")
 def extract(repo_root: Path, index: TraceIndex) -> None:
     """
-    Android 단위/계측 테스트에서 TestCase 노드와 validates 엣지를 추출한다.
+    Extract TestCase nodes and validates edges from Android unit/instrumentation tests.
     """
     kt_files: list[Path] = []
     for test_dir in get_config(repo_root).path_list("android_test_dirs"):
@@ -105,6 +107,6 @@ def extract(repo_root: Path, index: TraceIndex) -> None:
         except Exception as exc:  # noqa: BLE001
             rel = str(file_path.relative_to(repo_root))
             print(
-                f"[android_tests] 경고: {rel} 처리 실패: {exc}",
+                f"[android_tests] warning: failed to process {rel}: {exc}",
                 file=sys.stderr,
             )

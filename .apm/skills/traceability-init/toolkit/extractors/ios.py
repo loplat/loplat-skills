@@ -1,10 +1,10 @@
 """
-ios/docs/prd/*.md 와 ios/docs/adr/*.md 에서 iOS traceability 노드를 추출하는 추출기.
+Extractor that pulls iOS traceability nodes from ios/docs/prd/*.md and ios/docs/adr/*.md.
 
-- PlatformRequirement 노드: IOS-REQ-### 패턴
-  id = IOS-REQ-### (그대로)
-- IOSADR 노드: ADR-I-#### heading
-- IOSDecision 노드: IOS-DEC-### 결정 표 행
+- PlatformRequirement node: IOS-REQ-### pattern
+  id = IOS-REQ-### (as-is)
+- IOSADR node: ADR-I-#### heading
+- IOSDecision node: IOS-DEC-### decision table row
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from tools.traceability.config import get_config
 from tools.traceability.extractors import register
 from tools.traceability.model import TraceEdge, TraceIndex, TraceNode
 
-# 항목 전체 줄 패턴: "- IOS-REQ-NNN: 설명" 형식
+# Full item line pattern: "- IOS-REQ-NNN: description" format
 _IOS_REQ_LINE_RE = re.compile(r"^\s*-\s+(IOS-REQ-\d{3}):\s*(.+)$")
 _IOS_REQ_REF_RE = re.compile(r"\bIOS-REQ-(\d{3})(?:\s*~\s*(?:IOS-REQ-)?(\d{3}))?\b")
 _REQ_REF_RE = re.compile(r"(?<!IOS-)\bREQ-(\d{3})(?:\s*~\s*(?:REQ-)?(\d{3}))?\b")
@@ -25,6 +25,8 @@ _ADR_REF_RE = re.compile(r"\bADR-(\d{4})\b")
 _IOS_ADR_REF_RE = re.compile(r"\bADR-I-(\d{4})\b")
 _IOS_DEC_REF_RE = re.compile(r"\bIOS-DEC-(\d{3})\b")
 _IOS_ADR_HEADING_RE = re.compile(r"^#\s+(ADR-I-\d{4}):\s*(.+?)\s*$")
+# NOTE: The Korean literals below ("상태:", "관련 요구사항:", "공통 ADR:") are functional
+# markers matched against real iOS ADR document content — do not translate them.
 _STATUS_LINE_RE = re.compile(r"^\s*-\s*상태:\s*(.+?)\s*$")
 _RELATED_REQUIREMENTS_LINE_RE = re.compile(r"^\s*-\s*관련 요구사항:\s*(.+?)\s*$")
 _COMMON_ADR_LINE_RE = re.compile(r"^\s*-\s*공통 ADR:\s*(.+?)\s*$")
@@ -52,7 +54,7 @@ def _dedupe(values: list[str]) -> list[str]:
 
 
 def _extract_ref_ids(text: str) -> list[str]:
-    """iOS 문서 내 안정 ID 참조를 추출한다."""
+    """Extract stable ID references from iOS documents."""
     ref_ids: list[str] = []
     for match in _IOS_REQ_REF_RE.finditer(text):
         ref_ids.extend(_expand_prefixed_range("IOS-REQ", match.group(1), match.group(2)))
@@ -87,23 +89,23 @@ def _add_reference_edges(
 @register("ios")
 def extract(repo_root: Path, index: TraceIndex) -> None:
     """
-    iOS PRD/ADR 문서에서 PlatformRequirement, IOSADR, IOSDecision 노드를 추출한다.
+    Extract PlatformRequirement, IOSADR, and IOSDecision nodes from the iOS PRD/ADR documents.
 
     Args:
-        repo_root: 리포지토리 루트 경로
-        index: 트레이서빌리티 인덱스
+        repo_root: repository root path
+        index: traceability index
     """
     _extract_platform_requirements(repo_root, index)
     _extract_ios_adrs(repo_root, index)
 
 
 def _extract_platform_requirements(repo_root: Path, index: TraceIndex) -> None:
-    """iOS PRD 문서에서 PlatformRequirement 노드와 source ref edge를 추출한다."""
+    """Extract PlatformRequirement nodes and source ref edges from the iOS PRD documents."""
     for req_rel_path in get_config(repo_root).path_list("ios_req_docs"):
         req_path = repo_root / req_rel_path
         if not req_path.exists():
             print(
-                f"[ios] 경고: {req_rel_path} 파일 없음 — 건너뜀",
+                f"[ios] warning: {req_rel_path} not found — skipping",
                 file=sys.stderr,
             )
             continue
@@ -112,7 +114,7 @@ def _extract_platform_requirements(repo_root: Path, index: TraceIndex) -> None:
             text = req_path.read_text(encoding="utf-8")
         except Exception as exc:  # noqa: BLE001
             print(
-                f"[ios] 경고: {req_rel_path} 읽기 실패: {exc}",
+                f"[ios] warning: failed to read {req_rel_path}: {exc}",
                 file=sys.stderr,
             )
             continue
@@ -120,18 +122,18 @@ def _extract_platform_requirements(repo_root: Path, index: TraceIndex) -> None:
         lines = text.splitlines()
 
         for lineno, line in enumerate(lines, start=1):
-            # 항목 줄 형식: "- IOS-REQ-NNN: 설명"
+            # Item line format: "- IOS-REQ-NNN: description"
             m = _IOS_REQ_LINE_RE.match(line)
             if not m:
                 continue
 
-            req_id = m.group(1)  # 예: IOS-REQ-001
+            req_id = m.group(1)  # e.g. IOS-REQ-001
             description = m.group(2).strip()
 
-            # 설명에서 괄호 안 출처 참조 추출 (attrs 에 기록)
+            # Extract the source reference in parentheses from the description (recorded in attrs)
             source_refs: list[str] = re.findall(r"\(([^)]+)\)", description)
             source_ref_text = source_refs[-1] if source_refs else None
-            # 설명에서 출처 부분 제거 (마지막 괄호 내용)
+            # Strip the source portion from the description (the trailing parenthetical)
             title = re.sub(r"\s*\([^)]+\)\s*$", "", description).strip()
             if len(title) > 200:
                 title = title[:200] + "…"
@@ -158,7 +160,7 @@ def _extract_platform_requirements(repo_root: Path, index: TraceIndex) -> None:
 
 
 def _extract_ios_adrs(repo_root: Path, index: TraceIndex) -> None:
-    """iOS ADR 문서에서 IOSADR와 IOSDecision 노드를 추출한다."""
+    """Extract IOSADR and IOSDecision nodes from the iOS ADR documents."""
     adr_dir = repo_root / get_config(repo_root).path("ios_adr_dir")
     if not adr_dir.exists():
         return
@@ -169,7 +171,7 @@ def _extract_ios_adrs(repo_root: Path, index: TraceIndex) -> None:
         except Exception as exc:  # noqa: BLE001
             rel_path = str(adr_path.relative_to(repo_root))
             print(
-                f"[ios] 경고: {rel_path} 읽기 실패: {exc}",
+                f"[ios] warning: failed to read {rel_path}: {exc}",
                 file=sys.stderr,
             )
             continue

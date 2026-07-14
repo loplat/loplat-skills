@@ -1,13 +1,13 @@
 """
-traceability index 빌드 진입점.
+Entry point for building the traceability index.
 
-repo root 에서 실행:
+Run from the repo root:
     python3 tools/traceability/build_index.py
 
-또는 임의의 디렉토리에서 실행해도 repo root 를 자동 탐색:
+Or run from any directory — the repo root is auto-discovered:
     python3 /path/to/tools/traceability/build_index.py
 
-산출물: scratch/traceability/index.json
+Output: scratch/traceability/index.json
 """
 
 from __future__ import annotations
@@ -16,9 +16,9 @@ import sys
 from pathlib import Path
 
 # -----------------------------------------------------------------------------
-# sys.path 부트스트랩 — 직접 스크립트 실행 시 tools 패키지를 인식하게 한다.
-# pytest -m 방식 실행에서는 conftest.py 가 처리하므로
-# 아래 코드는 직접 스크립트 실행 경우에만 실질 효과가 있다.
+# sys.path bootstrap — makes the tools package importable when this script
+# is run directly. When run via `pytest -m`, conftest.py already handles
+# this, so the code below only has an effect for direct script execution.
 # -----------------------------------------------------------------------------
 _SCRIPT_DIR = Path(__file__).resolve().parent
 _REPO_ROOT_CANDIDATE = _SCRIPT_DIR.parent.parent  # tools/traceability → tools → repo root
@@ -35,25 +35,26 @@ from tools.traceability.model import TraceEdge, TraceIndex  # noqa: E402
 
 def _find_repo_root() -> Path:
     """
-    이 스크립트의 위치를 기준으로 repo root 를 탐색한다.
+    Locate the repo root based on this script's location.
 
-    스크립트가 tools/traceability/ 아래에 있다고 가정하므로
-    두 단계 상위 디렉토리가 repo root 다.
-    .git 디렉토리가 존재하는지 확인해 repo root 를 검증한다.
+    Assumes the script lives under tools/traceability/, so the repo root
+    is two levels up. Verifies the candidate by checking for a .git
+    directory.
     """
     candidate = _SCRIPT_DIR.parent.parent  # tools/traceability → tools → repo root
     if (candidate / ".git").exists():
         return candidate
-    # .git 이 없더라도 candidate 를 그대로 사용 (CI 환경 대비)
+    # Fall back to the candidate even without .git (e.g. CI environments)
     return candidate
 
 
 def main() -> None:
-    """index 빌드 메인 로직."""
+    """Main logic for building the index."""
     repo_root = _find_repo_root()
     index = TraceIndex()
 
-    # trace-config 로드 (부재 시 기본값). 손상·pyyaml 부재면 fail-closed(exit 2).
+    # Load trace-config (falls back to defaults if absent). Fail-closed
+    # (exit 2) if the file is corrupt or pyyaml is missing.
     try:
         cfg = get_config(repo_root)
     except TraceConfigError as exc:
@@ -64,10 +65,10 @@ def main() -> None:
     if disabled:
         print(f"[build_index] disabled extractors: {', '.join(disabled)}")
 
-    # 모든 추출기 실행 — 반환값: dict[str, tuple[nodes_added, edges_added]]
+    # Run all extractors — returns dict[str, tuple[nodes_added, edges_added]]
     stats = run_all(repo_root, index)
 
-    # manual-edges.yml 로드 — origin='manual' 엣지를 인덱스에 추가
+    # Load manual-edges.yml — adds origin='manual' edges to the index
     manual_edges_path = repo_root / cfg.path("ontology_dir") / "manual-edges.yml"
     manual_count = 0
     if manual_edges_path.exists():
@@ -94,25 +95,25 @@ def main() -> None:
                     )
                     manual_count += 1
         except ImportError:
-            # manual-edges.yml 이 존재하는데 pyyaml 이 없으면 fail-closed (exit 2)
+            # manual-edges.yml exists but pyyaml is missing — fail-closed (exit 2)
             print(
-                "[build_index] ERROR: manual-edges.yml 존재하나 pyyaml 미설치 — "
-                "fail-closed (exit 2). 'pip install pyyaml==6.0.2' 후 재실행.",
+                "[build_index] ERROR: manual-edges.yml exists but pyyaml is not installed — "
+                "fail-closed (exit 2). Run 'pip install pyyaml==6.0.2' and retry.",
                 file=sys.stderr,
             )
             sys.exit(2)
         except Exception as exc:
-            print(f"[build_index] warn: manual-edges.yml 로드 실패: {exc}")
+            print(f"[build_index] warn: failed to load manual-edges.yml: {exc}")
 
-    # 산출 디렉토리 생성
+    # Create the output directory
     out_dir = repo_root / "scratch" / "traceability"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # index.json 저장
+    # Save index.json
     out_path = out_dir / "index.json"
     out_path.write_text(index.to_json(), encoding="utf-8")
 
-    # stdout 요약 출력
+    # Print a summary to stdout
     total_nodes = len(index.nodes())
     total_edges = len(index.edges())
     print(f"[build_index] repo_root={repo_root}")

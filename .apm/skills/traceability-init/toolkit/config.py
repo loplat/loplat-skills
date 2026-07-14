@@ -1,12 +1,14 @@
-"""trace-config.yml 로더.
+"""Loader for trace-config.yml.
 
-docs/ontology/trace-config.yml 이 존재하면 경로·활성 추출기 설정을 읽고,
-없으면 참조 구현(reference implementation) 기본값으로 동작한다(하위 호환).
-다른 프로젝트가 이 툴킷을 vendoring 할 때는 코드 수정 없이 config 파일만 작성하면 된다.
+If docs/ontology/trace-config.yml exists, its path and active-extractor
+settings are read; otherwise the tool falls back to the reference
+implementation defaults (backward compatible). Other projects vendoring
+this toolkit only need to write a config file — no code changes required.
 
-config 파일이 존재하는데 PyYAML 이 없거나 파일이 손상됐으면
-TraceConfigError 를 던진다 — 호출측(build_index/verify/report)은 이를
-exit 2(fail-closed)로 변환한다. manual-edges.yml 의 기존 정책과 동일하다.
+If the config file exists but PyYAML is unavailable or the file is
+corrupt, a TraceConfigError is raised — callers (build_index/verify/report)
+convert this into exit 2 (fail-closed), matching the existing policy for
+manual-edges.yml.
 """
 
 from __future__ import annotations
@@ -18,8 +20,9 @@ CONFIG_REL_PATH = "docs/ontology/trace-config.yml"
 
 _SUPPORTED_VERSION = 1
 
-# 참조 구현 기본값 — config 부재 시 이 값으로 동작한다.
-# 키 이름은 추출기 모듈명과 정렬한다 (vendoring 적응 명세서 역할).
+# Reference implementation defaults — used when the config file is absent.
+# Key names are aligned with extractor module names (they double as a
+# vendoring adaptation spec).
 _DEFAULT_PATHS: dict[str, Any] = {
     "requirements": "docs/requirements/prd.md",
     "adr_dir": "docs/adr",
@@ -49,18 +52,20 @@ _DEFAULT_PATHS: dict[str, Any] = {
     ],
     "ios_ui_test_dir": "ios/App/AppUITests/",
     "ontology_dir": "docs/ontology",
+    # Agent-authored ontology file (resource-agnostic extraction channel).
+    "ontology_source": "docs/ontology/ontology.yml",
 }
 
-# verify.py 의 필수 요구(Requirement) 판정 우선순위 값
+# Priority value verify.py uses to identify "must-have" Requirements
 _DEFAULT_MUST_PRIORITY = "Must"
 
 
 class TraceConfigError(RuntimeError):
-    """config 파일 로드 실패 — 호출측에서 exit 2 로 처리한다."""
+    """Config file failed to load — the caller treats this as exit 2."""
 
 
 class TraceConfig:
-    """로드된 trace-config 접근자. 미지정 키는 기본값으로 폴백한다."""
+    """Accessor for the loaded trace-config. Unspecified keys fall back to defaults."""
 
     def __init__(self, raw: dict[str, Any] | None = None) -> None:
         raw = raw or {}
@@ -72,27 +77,27 @@ class TraceConfig:
         self.must_priority: str = str(priority.get("must", _DEFAULT_MUST_PRIORITY))
 
     def path(self, key: str) -> str:
-        """단일 경로 키 조회 (repo root 상대 문자열)."""
+        """Look up a single path key (a repo-root-relative string)."""
         value = self._paths[key]
         if not isinstance(value, str):
-            raise TraceConfigError(f"trace-config paths.{key} 는 문자열이어야 한다: {value!r}")
+            raise TraceConfigError(f"trace-config paths.{key} must be a string: {value!r}")
         return value
 
     def path_list(self, key: str) -> list[str]:
-        """경로 목록 키 조회."""
+        """Look up a path-list key."""
         value = self._paths[key]
         if isinstance(value, str):
             return [value]
         if isinstance(value, (list, tuple)) and all(isinstance(v, str) for v in value):
             return list(value)
-        raise TraceConfigError(f"trace-config paths.{key} 는 문자열 목록이어야 한다: {value!r}")
+        raise TraceConfigError(f"trace-config paths.{key} must be a list of strings: {value!r}")
 
     def extractor_enabled(self, name: str) -> bool:
-        """추출기 활성 여부 — config 에 명시적으로 false 인 경우만 비활성."""
+        """Whether an extractor is enabled — disabled only if config explicitly sets false."""
         return self._extractors.get(name, True)
 
     def disabled_extractor_names(self) -> list[str]:
-        """config 에서 명시적으로 비활성화된 추출기 이름 목록."""
+        """Names of extractors explicitly disabled in the config."""
         return sorted(n for n, enabled in self._extractors.items() if not enabled)
 
 
@@ -100,10 +105,11 @@ _CACHE: dict[Path, TraceConfig] = {}
 
 
 def get_config(repo_root: Path) -> TraceConfig:
-    """repo root 의 trace-config 를 반환한다(경로별 캐시).
+    """Return the trace-config for the given repo root (cached per path).
 
-    config 파일이 없으면 기본값 TraceConfig 를 반환한다. 파일이 있는데
-    PyYAML 미설치·YAML 손상·version 불일치면 TraceConfigError (fail-closed).
+    Returns a default TraceConfig if the config file is absent. Raises
+    TraceConfigError (fail-closed) if the file exists but PyYAML is
+    missing, the YAML is corrupt, or the version doesn't match.
     """
     root = Path(repo_root).resolve()
     cached = _CACHE.get(root)
@@ -118,20 +124,20 @@ def get_config(repo_root: Path) -> TraceConfig:
             import yaml  # type: ignore[import]
         except ImportError as exc:
             raise TraceConfigError(
-                f"{CONFIG_REL_PATH} 존재하나 pyyaml 미설치 — fail-closed. "
-                "'pip install pyyaml==6.0.2' 후 재실행."
+                f"{CONFIG_REL_PATH} exists but pyyaml is not installed — fail-closed. "
+                "Run 'pip install pyyaml==6.0.2' and retry."
             ) from exc
         try:
             with config_path.open(encoding="utf-8") as f:
                 raw = yaml.safe_load(f) or {}
         except Exception as exc:
-            raise TraceConfigError(f"{CONFIG_REL_PATH} 파싱 실패: {exc}") from exc
+            raise TraceConfigError(f"Failed to parse {CONFIG_REL_PATH}: {exc}") from exc
         if not isinstance(raw, dict):
-            raise TraceConfigError(f"{CONFIG_REL_PATH} 최상위는 매핑이어야 한다")
+            raise TraceConfigError(f"The top level of {CONFIG_REL_PATH} must be a mapping")
         version = raw.get("version", _SUPPORTED_VERSION)
         if version != _SUPPORTED_VERSION:
             raise TraceConfigError(
-                f"trace-config version {version} 은 지원하지 않는다 (지원: {_SUPPORTED_VERSION})"
+                f"trace-config version {version} is not supported (supported: {_SUPPORTED_VERSION})"
             )
         cfg = TraceConfig(raw)
 
@@ -140,5 +146,5 @@ def get_config(repo_root: Path) -> TraceConfig:
 
 
 def clear_cache() -> None:
-    """테스트용 — 캐시 초기화."""
+    """For test use — clears the cache."""
     _CACHE.clear()

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""traceability-init 1단계: 프로젝트 문서/코드 자산 인벤토리 스캔.
+"""traceability-init step 1: inventory scan of a project's doc/code assets.
 
-사용: python3 inventory.py [repo_root]
-출력: JSON (stdout). 외부 의존성 없음(stdlib only).
-디렉토리 구조를 가정하지 않는다 — 문서 자산은 트리 탐색(depth 4)으로 이름 기반 탐지한다.
+Usage: python3 inventory.py [repo_root]
+Output: JSON (stdout). No external dependencies (stdlib only).
+Assumes no directory layout — doc assets are detected by name via a
+bounded tree walk (depth 4).
 """
 
 from __future__ import annotations
@@ -31,7 +32,7 @@ def repo_root(arg: str | None) -> Path:
 
 
 def walk(root: Path):
-    """depth·노이즈 제한된 트리 순회 (파일·디렉토리 모두 yield)."""
+    """Depth- and noise-bounded tree walk (yields both files and directories)."""
     base_depth = len(root.parts)
     for p in root.rglob("*"):
         if len(p.parts) - base_depth > MAX_DEPTH:
@@ -42,7 +43,7 @@ def walk(root: Path):
 
 
 def scan(root: Path) -> tuple[list[str], dict[str, list[str]]]:
-    """한 번의 순회로 파일 패턴·디렉토리 이름을 동시 수집."""
+    """Collect file patterns and directory names in a single walk."""
     prd_hits: list[str] = []
     openapi_hits: list[str] = []
     dir_hits: dict[str, list[str]] = {"adr": [], "specs": [], "ontology": []}
@@ -54,7 +55,7 @@ def scan(root: Path) -> tuple[list[str], dict[str, list[str]]]:
         name = p.name.lower()
         if p.is_dir():
             key = dir_names.get(name)
-            # 대소문자만 다른 중복(macOS case-insensitive fs) 제거
+            # Drop case-only duplicates (macOS case-insensitive filesystems)
             if key and rel.lower() not in seen_dirs:
                 seen_dirs.add(rel.lower())
                 dir_hits[key].append(rel)

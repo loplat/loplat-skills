@@ -1,13 +1,13 @@
 """
-backend/app/api/v1/*.py, backend/app/services/*.py,
-backend/app/domain/**/*.py 에서 CodeSymbol 노드를 추출하는 추출기.
+Extractor that pulls CodeSymbol nodes from backend/app/api/v1/*.py,
+backend/app/services/*.py, and backend/app/domain/**/*.py.
 
-- CodeSymbol 노드: 최상위 class / def / async def
-  id = {repo 상대 경로}:{심볼명}
-- route decorator (@router.<method>(...)) 파싱:
-  path + method 를 CodeSymbol attrs 에 기록
-- routed_to 엣지: ApiOperation → CodeSymbol
-  (path+method 가 openapi 와 일치할 때만, best-effort)
+- CodeSymbol node: a top-level class / def / async def
+  id = {repo-relative path}:{symbol name}
+- Route decorator (@router.<method>(...)) parsing:
+  records path + method into CodeSymbol attrs
+- routed_to edge: ApiOperation → CodeSymbol
+  (only when path+method matches openapi, best-effort)
 """
 
 from __future__ import annotations
@@ -22,38 +22,38 @@ from tools.traceability.config import get_config
 from tools.traceability.extractors import register
 from tools.traceability.model import TraceEdge, TraceIndex, TraceNode
 
-# HTTP 메서드 (router.METHOD 형태)
+# HTTP methods (in router.METHOD form)
 _ROUTE_METHODS = {"get", "post", "put", "delete", "patch", "options", "head"}
 
 
 def _normalize_path(path: str) -> str:
     """
-    path parameter placeholder 이름을 제거해 비교 가능한 형태로 정규화한다.
+    Strip path parameter placeholder names to normalize into a comparable form.
 
-    {device_id} 와 {deviceId} 같은 이름 차이를 흡수하기 위해
-    모든 {…} 를 {} 로 치환한다.
+    Replace every {…} with {} to absorb name differences such as
+    {device_id} vs {deviceId}.
 
     Args:
-        path: 원본 HTTP path 문자열
+        path: raw HTTP path string
 
     Returns:
-        placeholder 이름을 제거한 정규화 경로
+        the normalized path with placeholder names stripped
     """
     return re.sub(r"\{[^}]+\}", "{}", path.rstrip("/"))
 
 
 def _build_openapi_lookup(repo_root: Path) -> dict[tuple[str, str], str]:
     """
-    openapi.json 에서 (normalized_path, method_upper) → operationId 매핑 생성.
+    Build a (normalized_path, method_upper) → operationId mapping from openapi.json.
 
-    양측 path 를 _normalize_path 와 동일한 규칙으로 정규화해
-    {deviceId} vs {device_id} 같은 이름 차이를 흡수한다.
+    Both sides' paths are normalized with the same rule as _normalize_path
+    to absorb name differences such as {deviceId} vs {device_id}.
 
     Args:
-        repo_root: 리포지토리 루트 경로
+        repo_root: repository root path
 
     Returns:
-        (normalized_path, method) → operationId 딕셔너리
+        a dict mapping (normalized_path, method) → operationId
     """
     openapi_path = repo_root / get_config(repo_root).path("openapi")
     if not openapi_path.exists():
@@ -75,7 +75,7 @@ def _build_openapi_lookup(repo_root: Path) -> dict[tuple[str, str], str]:
                 continue
             op_id = op_info.get("operationId")
             if op_id:
-                # OpenAPI 쪽도 동일한 정규화 적용 (양측 일치 보장)
+                # Apply the same normalization to the OpenAPI side (guarantees both sides match)
                 lookup[(_normalize_path(path), method.upper())] = op_id
 
     return lookup
@@ -83,13 +83,13 @@ def _build_openapi_lookup(repo_root: Path) -> dict[tuple[str, str], str]:
 
 def _collect_target_files(repo_root: Path) -> list[Path]:
     """
-    대상 파일 목록을 수집하고 정렬해 반환한다.
+    Collect and sort the list of target files.
 
     Args:
-        repo_root: 리포지토리 루트 경로
+        repo_root: repository root path
 
     Returns:
-        정렬된 파일 경로 목록
+        a sorted list of file paths
     """
     seen: set[Path] = set()
     files: list[Path] = []
@@ -109,16 +109,16 @@ def _extract_route_info(
     decorator_list: list[ast.expr],
 ) -> list[tuple[str, str]]:
     """
-    함수의 데코레이터에서 route 정보를 추출한다.
-    @router.METHOD(path_str, ...) 또는 @router.METHOD("path", ...)
+    Extract route information from a function's decorators.
+    @router.METHOD(path_str, ...) or @router.METHOD("path", ...)
 
-    멀티라인 데코레이터도 AST 를 사용하므로 견고하게 처리된다.
+    Multi-line decorators are also handled robustly since AST is used.
 
     Args:
-        decorator_list: AST 데코레이터 노드 목록
+        decorator_list: list of AST decorator nodes
 
     Returns:
-        [(path_str, method_upper), ...] 목록
+        a list of [(path_str, method_upper), ...]
     """
     routes: list[tuple[str, str]] = []
 
@@ -132,7 +132,7 @@ def _extract_route_info(
         if method not in _ROUTE_METHODS:
             continue
 
-        # 첫 번째 위치 인자가 path 문자열
+        # The first positional argument is the path string
         if not dec.args:
             continue
         path_arg = dec.args[0]
@@ -144,14 +144,14 @@ def _extract_route_info(
 
 def _get_router_prefix(tree: ast.Module) -> str:
     """
-    모듈에서 router = APIRouter(prefix="...") 의 prefix 를 추출한다.
-    prefix 를 알 수 없으면 빈 문자열을 반환한다.
+    Extract the prefix from router = APIRouter(prefix="...") in the module.
+    Returns an empty string if the prefix cannot be determined.
 
     Args:
-        tree: AST 모듈 노드
+        tree: AST module node
 
     Returns:
-        prefix 문자열 (없으면 "")
+        the prefix string (empty if absent)
     """
     for node in ast.walk(tree):
         if not isinstance(node, ast.Assign):
@@ -160,7 +160,7 @@ def _get_router_prefix(tree: ast.Module) -> str:
         if not isinstance(node.value, ast.Call):
             continue
         call = node.value
-        # APIRouter 확인
+        # Check for APIRouter
         call_name = ""
         if isinstance(call.func, ast.Name):
             call_name = call.func.id
@@ -169,7 +169,7 @@ def _get_router_prefix(tree: ast.Module) -> str:
         if call_name != "APIRouter":
             continue
 
-        # prefix 키워드 인자 찾기
+        # Find the prefix keyword argument
         for kw in call.keywords:
             if kw.arg == "prefix" and isinstance(kw.value, ast.Constant):
                 return str(kw.value.value)
@@ -184,13 +184,13 @@ def _process_file(
     openapi_lookup: dict[tuple[str, str], str],
 ) -> None:
     """
-    단일 파일을 AST 로 파싱해 CodeSymbol 노드와 routed_to 엣지를 추출한다.
+    Parse a single file with AST and extract CodeSymbol nodes and routed_to edges.
 
     Args:
-        repo_root: 리포지토리 루트 경로
-        file_path: 파싱할 파일 절대 경로
-        index: 트레이서빌리티 인덱스
-        openapi_lookup: (path, method) → operationId 매핑
+        repo_root: repository root path
+        file_path: absolute path of the file to parse
+        index: traceability index
+        openapi_lookup: (path, method) → operationId mapping
     """
     rel_path = str(file_path.relative_to(repo_root))
 
@@ -198,7 +198,7 @@ def _process_file(
         source = file_path.read_text(encoding="utf-8")
     except Exception as exc:  # noqa: BLE001
         print(
-            f"[code_symbol] 경고: {rel_path} 읽기 실패: {exc}",
+            f"[code_symbol] warning: failed to read {rel_path}: {exc}",
             file=sys.stderr,
         )
         return
@@ -207,15 +207,15 @@ def _process_file(
         tree = ast.parse(source, filename=rel_path)
     except SyntaxError as exc:
         print(
-            f"[code_symbol] 경고: {rel_path} AST 파싱 실패: {exc} — 건너뜀",
+            f"[code_symbol] warning: AST parse failed for {rel_path}: {exc} — skipping",
             file=sys.stderr,
         )
         return
 
-    # 라우터 prefix 추출 (api/v1 파일에 사용)
+    # Extract the router prefix (used for api/v1 files)
     router_prefix = _get_router_prefix(tree)
 
-    # 최상위 정의(class/def/async def)만 처리
+    # Process only top-level definitions (class/def/async def)
     for node in ast.iter_child_nodes(tree):
         if not isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
@@ -223,15 +223,15 @@ def _process_file(
         symbol_name = node.name
         symbol_id = f"{rel_path}:{symbol_name}"
 
-        # route 정보 추출 (함수/메서드에만 해당)
+        # Extract route info (applies only to functions/methods)
         route_info: list[tuple[str, str]] = []
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             route_info = _extract_route_info(node.decorator_list)
 
-        # route_path, route_method attrs 구성
+        # Build route_path, route_method attrs
         attrs: dict = {}
         if route_info:
-            # 여러 데코레이터가 있을 경우 첫 번째 사용
+            # Use the first decorator if there are several
             r_path, r_method = route_info[0]
             attrs["route_path"] = r_path
             attrs["route_method"] = r_method
@@ -246,9 +246,9 @@ def _process_file(
         )
         index.add_node(sym_node)
 
-        # routed_to 엣지 생성 (path+method 가 openapi 와 일치할 때)
+        # Create a routed_to edge (when path+method matches openapi)
         for r_path, r_method in route_info:
-            # prefix 결합 후 정규화
+            # Combine with the prefix, then normalize
             full_path = _normalize_path(router_prefix + r_path) or "/"
             op_id = openapi_lookup.get((full_path, r_method))
             if op_id:
@@ -265,23 +265,24 @@ def _process_file(
 @register("code_symbol")
 def extract(repo_root: Path, index: TraceIndex) -> None:
     """
-    backend 코드에서 CodeSymbol 노드와 routed_to 엣지를 추출한다.
+    Extract CodeSymbol nodes and routed_to edges from the backend code.
 
-    ConsentsService, AuthService 를 포함한 모든 최상위 클래스/함수가 추출된다.
+    Every top-level class/function is extracted, including ConsentsService
+    and AuthService.
 
     Args:
-        repo_root: 리포지토리 루트 경로
-        index: 트레이서빌리티 인덱스
+        repo_root: repository root path
+        index: traceability index
     """
     files = _collect_target_files(repo_root)
     if not files:
         print(
-            "[code_symbol] 경고: 대상 파일 없음 — 건너뜀",
+            "[code_symbol] warning: no target files found — skipping",
             file=sys.stderr,
         )
         return
 
-    # OpenAPI 경로 → operationId 매핑 (routed_to 엣지 생성용)
+    # OpenAPI path → operationId mapping (used to create routed_to edges)
     openapi_lookup = _build_openapi_lookup(repo_root)
 
     for file_path in files:
@@ -290,6 +291,6 @@ def extract(repo_root: Path, index: TraceIndex) -> None:
         except Exception as exc:  # noqa: BLE001
             rel = str(file_path.relative_to(repo_root))
             print(
-                f"[code_symbol] 경고: {rel} 처리 실패: {exc}",
+                f"[code_symbol] warning: failed to process {rel}: {exc}",
                 file=sys.stderr,
             )

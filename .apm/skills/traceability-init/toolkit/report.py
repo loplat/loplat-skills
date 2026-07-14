@@ -1,18 +1,18 @@
 """
-traceability 리포트 생성 진입점 (Phase 4 전면 구현).
+Traceability report generation entry point (Phase 4 full implementation).
 
-repo root 에서 실행:
+Run from repo root:
     python3 tools/traceability/report.py
     python3 tools/traceability/report.py --changed docs/requirements/prd.md
 
-산출물:
-    scratch/traceability/report.md  -- 사람이 읽는 Markdown 리포트
-    scratch/traceability/report.html -- self-contained 인터랙티브 HTML 리포트
+Outputs:
+    scratch/traceability/report.md  -- human-readable Markdown report
+    scratch/traceability/report.html -- self-contained interactive HTML report
 
-CLI 옵션:
-    --changed <path> [<path> ...] -- changed-file impact 섹션 채움
-        (해당 source_file을 가진 노드 + 1-hop 연결 노드/edge)
-        git 직접 호출 없음 -- 인자로만 받음.
+CLI options:
+    --changed <path> [<path> ...] -- populates the changed-file impact section
+        (nodes with the matching source_file + 1-hop connected nodes/edges)
+        No direct git calls -- accepted only as arguments.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-# sys.path 부트스트랩
+# sys.path bootstrap
 _SCRIPT_DIR = Path(__file__).resolve().parent
 _REPO_ROOT_CANDIDATE = _SCRIPT_DIR.parent.parent
 if str(_REPO_ROOT_CANDIDATE) not in sys.path:
@@ -31,8 +31,8 @@ if str(_REPO_ROOT_CANDIDATE) not in sys.path:
 
 from tools.traceability.config import get_config  # noqa: E402
 
-# verify.py 와 동일한 seed-trace 인접성/경로 판정을 재사용해 report 의 "연결 상태"
-# 표시가 verify 의 seed_trace_gap 판정(≤2-hop)과 일관되게 한다.
+# Reuses the same seed-trace adjacency/path logic as verify.py so that report's "connection
+# status" display stays consistent with verify's seed_trace_gap judgment (<=2-hop).
 from tools.traceability.verify import (  # noqa: E402
     _build_seed_trace_adjacency,
     _has_seed_trace_path,
@@ -40,28 +40,28 @@ from tools.traceability.verify import (  # noqa: E402
 
 
 def _ontology_path(filename: str, repo_root: Path | None = None) -> Path:
-    """docs/ontology(config 로 재정의 가능) 하위 파일의 절대 경로."""
+    """Absolute path to a file under docs/ontology (overridable via config)."""
     root = repo_root or _find_repo_root()
     return root / get_config(root).path("ontology_dir") / filename
 
 
 def _find_repo_root() -> Path:
-    """repo root 탐색."""
+    """Locate the repo root."""
     return _SCRIPT_DIR.parent.parent
 
 
 # ────────────────────────────────────────────────────────────────────────
-# 내부 유틸리티
+# Internal utilities
 # ────────────────────────────────────────────────────────────────────────
 
 
 def _escape_md(text: str) -> str:
-    """Markdown 파이프 문자 이스케이프."""
+    """Escape Markdown pipe characters."""
     return text.replace("|", "\\|")
 
 
 def _escape_html(text: str) -> str:
-    """HTML 특수문자 이스케이프."""
+    """Escape HTML special characters."""
     return (
         text.replace("&", "&amp;")
         .replace("<", "&lt;")
@@ -72,7 +72,7 @@ def _escape_html(text: str) -> str:
 
 
 # ────────────────────────────────────────────────────────────────────────
-# 샘플 트레이스 경로 구성 (seed-traces.yml 의 첫 seed 기준)
+# Build sample trace path (based on the first seed in seed-traces.yml)
 # ────────────────────────────────────────────────────────────────────────
 
 
@@ -82,21 +82,21 @@ def _build_sample_trace(
     repo_root: Path | None = None,
 ) -> list[dict[str, str]]:
     """
-    seed-traces.yml 의 첫 번째 seed 를 핵심 트레이스 경로로 렌더한다.
+    Renders the first seed in seed-traces.yml as the core trace path.
 
-    seed 의 layers 를 순서대로 순회하며 인접 step 쌍을 edges 에서 조회해 실제 연결
-    여부(직접 edge / manual edge / 미연결)를 edge_label/note 에 반영한다. 연결된 경우
-    note 를 비워 HTML/MD 렌더가 "linked" 로 표시하도록 한다.
+    Walks the seed's layers in order and looks up each adjacent step pair in edges to
+    reflect the actual connection status (direct edge / manual edge / unlinked) in
+    edge_label/note. When connected, note is left empty so the HTML/MD render shows "linked".
 
-    seed 가 없으면(다른 프로젝트에서 seed-traces.yml 미작성) 빈 목록을 반환하고
-    호출측은 섹션을 생략한다. 특정 도메인 id 를 코드에 하드코딩하지 않는다.
+    If there is no seed (e.g. another project hasn't written seed-traces.yml yet), it
+    returns an empty list and the caller omits the section. No domain-specific id is hardcoded.
 
     Returns:
-        트레이스 노드 목록 (id, type, source_file, title, edge_label, note, layer 포함).
+        List of trace nodes (includes id, type, source_file, title, edge_label, note, layer).
     """
     node_map: dict[str, dict[str, Any]] = {n["id"]: n for n in nodes}
 
-    # edges 에서 (source, target, origin) 쌍 구성 — 양방향 모두 저장
+    # Build (source, target, origin) pairs from edges -- store both directions
     auto_pairs: set[tuple[str, str]] = set()
     manual_pairs: set[tuple[str, str]] = set()
     for e in edges:
@@ -111,14 +111,14 @@ def _build_sample_trace(
             auto_pairs.add((t, s))
 
     def _edge_status(prev_id: str, cur_id: str) -> tuple[str, str]:
-        """인접 쌍의 (edge_label, note) 반환. 연결 시 note='', 미연결 시 note 채움."""
+        """Return (edge_label, note) for an adjacent pair. note='' when linked, filled when unlinked."""
         if (prev_id, cur_id) in auto_pairs or (cur_id, prev_id) in auto_pairs:
-            return f"{prev_id} → {cur_id} [직접 edge]", ""
+            return f"{prev_id} → {cur_id} [direct edge]", ""
         if (prev_id, cur_id) in manual_pairs or (cur_id, prev_id) in manual_pairs:
             return f"{prev_id} → {cur_id} [manual edge]", ""
-        return f"(미연결: {prev_id}와 직접 edge 없음)", "(미연결)"
+        return f"(unlinked: no direct edge with {prev_id})", "(unlinked)"
 
-    # 첫 seed 의 layers 를 트레이스 소스로 사용
+    # Use the first seed's layers as the trace source
     seeds = _load_seed_traces(repo_root)
     if not seeds:
         return []
@@ -144,7 +144,7 @@ def _build_sample_trace(
                 {
                     "id": node_id,
                     "type": "?",
-                    "source_file": "(인덱스에 없음)",
+                    "source_file": "(not in index)",
                     "title": node_id,
                     "edge_label": edge_label,
                     "note": note,
@@ -169,21 +169,21 @@ def _build_sample_trace(
 
 
 # ────────────────────────────────────────────────────────────────────────
-# Seed Traces 섹션 렌더링 (Phase 7)
+# Seed Traces section rendering (Phase 7)
 # ────────────────────────────────────────────────────────────────────────
 
 
 def _load_seed_traces(repo_root: Path | None = None) -> list[dict]:
     """
-    seed-traces.yml 을 로드해 trace 목록을 반환한다.
+    Loads seed-traces.yml and returns the trace list.
 
-    pyyaml 없거나 파일 없으면 빈 목록 반환 (graceful degradation).
+    Returns an empty list if pyyaml is missing or the file doesn't exist (graceful degradation).
 
     Args:
-        repo_root: repo root Path (None 이면 스크립트 위치 기반 추론).
+        repo_root: repo root Path (inferred from script location if None).
 
     Returns:
-        seed trace dict 목록.
+        List of seed trace dicts.
     """
     if repo_root is None:
         repo_root = _find_repo_root()
@@ -204,13 +204,13 @@ def _load_seed_traces(repo_root: Path | None = None) -> list[dict]:
 
 def _load_manual_edges(repo_root: Path | None = None) -> list[dict]:
     """
-    manual-edges.yml 을 로드해 edge dict 목록을 반환한다.
+    Loads manual-edges.yml and returns a list of edge dicts.
 
     Args:
         repo_root: repo root Path.
 
     Returns:
-        edge dict 목록.
+        List of edge dicts.
     """
     if repo_root is None:
         repo_root = _find_repo_root()
@@ -236,10 +236,10 @@ def _build_seed_connection_status(
     adjacency: dict[str, set[str]] | None = None,
 ) -> str:
     """
-    두 인접 layer 노드 간 연결 상태를 반환한다.
+    Returns the connection status between two adjacent layer nodes.
 
-    1-hop 직접 edge가 없어도 verify.py 의 seed_trace_gap 판정과 동일한 ≤2-hop 경로가
-    있으면 'indirect'(연결됨)로 보고한다. adjacency 가 주어지지 않으면 1-hop 만 판정한다.
+    Even without a 1-hop direct edge, reports 'indirect' (connected) if a <=2-hop path exists,
+    matching verify.py's seed_trace_gap judgment. If adjacency isn't given, only 1-hop is judged.
 
     Returns:
         'direct' | 'manual' | 'indirect' | 'gap' | 'missing_node'
@@ -262,23 +262,23 @@ def _build_seed_traces_section(
     repo_root: Path | None = None,
 ) -> list[str]:
     """
-    Seed Traces 섹션 Markdown 줄 목록을 반환한다.
+    Returns the Markdown line list for the Seed Traces section.
 
     Args:
-        nodes: index.json nodes 목록.
-        edges: index.json edges 목록 (auto).
+        nodes: index.json nodes list.
+        edges: index.json edges list (auto).
         ci: ci-summary.json dict.
         repo_root: repo root Path.
 
     Returns:
-        Markdown 줄 목록.
+        List of Markdown lines.
     """
     lines: list[str] = []
     seed_list = _load_seed_traces(repo_root)
     manual_edge_list = _load_manual_edges(repo_root)
 
     if not seed_list:
-        lines.append("_(seed-traces.yml 없음 또는 로드 실패)_")
+        lines.append("_(seed-traces.yml missing or failed to load)_")
         return lines
 
     node_map: dict = {n["id"]: n for n in nodes}
@@ -312,7 +312,7 @@ def _build_seed_traces_section(
         layers = seed.get("layers", []) or []
 
         lines.append(f"### {seed_id}: {_escape_md(title)}\n")
-        lines.append("| 층 | 노드 id | source 파일 | 연결 상태 |")
+        lines.append("| Layer | Node id | Source file | Connection status |")
         lines.append("|---|---|---|---|")
 
         layer_nodes: list[str] = []
@@ -328,35 +328,35 @@ def _build_seed_traces_section(
                 else f"L{i + 1}"
             )
             n = node_map.get(nid)
-            sf = n.get("source_file", "(인덱스 없음)") if n else "(인덱스 없음)"
+            sf = n.get("source_file", "(not in index)") if n else "(not in index)"
             nid_esc = _escape_md(nid)
             sf_esc = _escape_md(sf)
 
             if nid not in node_ids:
-                status = "**BROKEN (노드 없음)**"
+                status = "**BROKEN (node missing)**"
             elif i == 0:
-                status = "시작점"
+                status = "start"
             else:
                 prev = layer_nodes[i - 1]
                 conn = _build_seed_connection_status(
                     prev, nid, auto_pairs, manual_pairs, node_ids, adjacency
                 )
                 if conn == "direct":
-                    status = "직접 edge"
+                    status = "direct edge"
                 elif conn == "manual":
                     status = "manual edge"
                 elif conn == "indirect":
-                    status = "간접 edge (≤2-hop)"
+                    status = "indirect edge (<=2-hop)"
                 elif conn == "gap":
-                    status = "_(gap — edge 없음)_"
+                    status = "_(gap — no edge)_"
                 else:
-                    status = "_(이전 노드 없음)_"
+                    status = "_(no previous node)_"
 
             lines.append(f"| {_escape_md(layer_name)} | `{nid_esc}` | `{sf_esc}` | {status} |")
 
         lines.append("")
 
-    # ci-summary에서 seed 관련 findings 요약
+    # Summarize seed-related findings from ci-summary
     all_findings = []
     for cat_key in ("deterministic", "coverage", "semantic_candidate"):
         cat = ci.get("categories", {}).get(cat_key, [])
@@ -393,22 +393,22 @@ def _build_seed_traces_html(
     repo_root: Path | None = None,
 ) -> str:
     """
-    Seed Traces HTML 블록 문자열을 반환한다.
+    Returns the Seed Traces HTML block string.
 
     Args:
-        nodes: index.json nodes 목록.
-        edges: index.json edges 목록 (auto).
+        nodes: index.json nodes list.
+        edges: index.json edges list (auto).
         ci: ci-summary.json dict.
         repo_root: repo root Path.
 
     Returns:
-        HTML 문자열.
+        HTML string.
     """
     seed_list = _load_seed_traces(repo_root)
     manual_edge_list = _load_manual_edges(repo_root)
 
     if not seed_list:
-        return "<p class='muted'>(seed-traces.yml 없음 또는 로드 실패)</p>"
+        return "<p class='muted'>(seed-traces.yml missing or failed to load)</p>"
 
     node_map: dict = {n["id"]: n for n in nodes}
     node_ids: set = {n["id"] for n in nodes}
@@ -450,7 +450,7 @@ def _build_seed_traces_html(
         )
         html_parts.append(
             "<table><thead><tr>"
-            + "<th>층</th><th>노드 id</th><th>source 파일</th><th>연결 상태</th>"
+            + "<th>Layer</th><th>Node id</th><th>Source file</th><th>Connection status</th>"
             + "</tr></thead><tbody>"
         )
 
@@ -462,7 +462,7 @@ def _build_seed_traces_html(
                 else f"L{i + 1}"
             )
             n = node_map.get(nid)
-            sf = n.get("source_file", "(인덱스 없음)") if n else "(인덱스 없음)"
+            sf = n.get("source_file", "(not in index)") if n else "(not in index)"
 
             nid_esc = _escape_html(nid)
             sf_esc = _escape_html(sf)
@@ -470,10 +470,10 @@ def _build_seed_traces_html(
 
             if nid not in node_ids:
                 status_class = "unlinked"
-                status_text = "BROKEN (노드 없음)"
+                status_text = "BROKEN (node missing)"
             elif i == 0:
                 status_class = "linked"
-                status_text = "시작점"
+                status_text = "start"
             else:
                 prev = layer_nodes[i - 1]
                 conn = _build_seed_connection_status(
@@ -481,19 +481,19 @@ def _build_seed_traces_html(
                 )
                 if conn == "direct":
                     status_class = "linked"
-                    status_text = "직접 edge"
+                    status_text = "direct edge"
                 elif conn == "manual":
                     status_class = "linked"
                     status_text = "manual edge"
                 elif conn == "indirect":
                     status_class = "linked"
-                    status_text = "간접 edge (≤2-hop)"
+                    status_text = "indirect edge (<=2-hop)"
                 elif conn == "gap":
                     status_class = "unlinked"
-                    status_text = "gap — edge 없음"
+                    status_text = "gap — no edge"
                 else:
                     status_class = "unlinked"
-                    status_text = "이전 노드 없음"
+                    status_text = "no previous node"
 
             html_parts.append(
                 "<tr>"
@@ -520,7 +520,7 @@ def _build_seed_traces_html(
 
 
 def _ci_findings(ci: dict[str, Any]) -> list[dict[str, Any]]:
-    """ci-summary.json 의 finding 목록을 단일 list 로 평탄화한다."""
+    """Flatten the finding list from ci-summary.json into a single list."""
     categories = ci.get("categories", {})
     findings: list[dict[str, Any]] = []
 
@@ -543,7 +543,7 @@ def _ci_findings(ci: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _seed_id_from_finding(finding: dict[str, Any]) -> str:
-    """seed_trace finding 의 대상 seed id 를 추출한다."""
+    """Extract the target seed id from a seed_trace finding."""
     subject = finding.get("subject") or ""
     if isinstance(subject, str) and subject.startswith("SEED-"):
         return subject
@@ -557,7 +557,7 @@ def _seed_id_from_finding(finding: dict[str, Any]) -> str:
 
 
 def _normalize_excerpt(text: str, limit: int = 520) -> str:
-    """원문 excerpt 를 HTML payload 에 넣기 좋은 짧은 단락으로 정리한다."""
+    """Trim the source excerpt into a short paragraph suitable for the HTML payload."""
     cleaned = " ".join(text.replace("|", " ").split())
     if len(cleaned) <= limit:
         return cleaned
@@ -565,7 +565,7 @@ def _normalize_excerpt(text: str, limit: int = 520) -> str:
 
 
 def _node_excerpt_terms(node: dict[str, Any]) -> list[str]:
-    """노드 원문 탐색에 사용할 후보 문자열을 반환한다."""
+    """Return candidate strings used to search a node's source text."""
     terms: list[str] = []
     node_id = node.get("id", "")
     title = node.get("title", "")
@@ -585,7 +585,7 @@ def _node_excerpt_terms(node: dict[str, Any]) -> list[str]:
     if node_type == "SequenceDiagram":
         terms.append("sequenceDiagram")
 
-    # 긴 문자열을 먼저 찾으면 REQ/UC table row 같은 실제 본문 적중률이 높다.
+    # Searching for longer strings first improves hit rate against real body text like REQ/UC table rows.
     unique_terms = []
     seen = set()
     for term in sorted((t for t in terms if len(t) >= 3), key=len, reverse=True):
@@ -601,10 +601,11 @@ def _build_node_excerpt(
     context_lines: int = 2,
 ) -> str:
     """
-    노드의 source 파일에서 해당 노드 주변 원문 excerpt 를 추출한다.
+    Extracts a source excerpt around the node from its source file.
 
-    인덱스가 가진 title 만으로 의미 파악이 어려운 경우를 보완하기 위한 report 전용 best-effort
-    로직이다. 실패해도 리포트 생성을 막지 않고 빈 문자열을 반환한다.
+    This is report-only best-effort logic to compensate for cases where the index's title
+    alone isn't enough to understand meaning. Failure never blocks report generation -- it
+    returns an empty string instead.
     """
     if repo_root is None:
         repo_root = _find_repo_root()
@@ -676,10 +677,10 @@ def _build_seed_graph_payload(
     repo_root: Path | None = None,
 ) -> list[dict[str, Any]]:
     """
-    HTML SVG 렌더러가 사용할 seed trace graph payload 를 구성한다.
+    Builds the seed trace graph payload used by the HTML SVG renderer.
 
-    전체 ontology graph 대신 seed trace 중심 subgraph 만 싣는다.
-    각 인접 layer edge 는 direct/manual/gap/missing_node 로 표시된다.
+    Carries only the seed-trace-centered subgraph instead of the full ontology graph.
+    Each adjacent layer edge is marked as direct/manual/gap/missing_node.
     """
     seed_list = _load_seed_traces(repo_root)
     manual_edge_list = _load_manual_edges(repo_root)
@@ -753,9 +754,9 @@ def _build_seed_graph_payload(
                     "layer": layer_name,
                     "node": node_id,
                     "type": node.get("type", "?") if node else "?",
-                    "source_file": node.get("source_file", "(인덱스 없음)")
+                    "source_file": node.get("source_file", "(not in index)")
                     if node
-                    else "(인덱스 없음)",
+                    else "(not in index)",
                     "title": (node.get("title") or node_id) if node else node_id,
                     "excerpt": _build_node_excerpt(node, repo_root) if node else "",
                     "exists": exists,
@@ -800,7 +801,7 @@ def _build_seed_graph_payload(
 
 
 # ────────────────────────────────────────────────────────────────────────
-# Changed-file impact 분석
+# Changed-file impact analysis
 # ────────────────────────────────────────────────────────────────────────
 
 
@@ -810,15 +811,15 @@ def _compute_impact(
     changed_paths: list[str],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """
-    변경 파일 집합에 직접 연결된 노드(direct)와 1-hop 이웃 노드(neighbor)를 반환한다.
+    Returns nodes directly connected to the changed-file set (direct) and 1-hop neighbor nodes (neighbor).
 
     Args:
-        nodes: 전체 노드 목록.
-        edges: 전체 엣지 목록.
-        changed_paths: 변경된 파일 경로 목록 (인자로만 받음, git 직접 호출 없음).
+        nodes: Full node list.
+        edges: Full edge list.
+        changed_paths: List of changed file paths (accepted only as an argument, no direct git calls).
 
     Returns:
-        (direct_nodes, neighbor_nodes) 튜플.
+        (direct_nodes, neighbor_nodes) tuple.
     """
     changed_set = set(changed_paths)
 
@@ -844,7 +845,7 @@ def _compute_impact(
 
 
 # ────────────────────────────────────────────────────────────────────────
-# Markdown 리포트 생성
+# Markdown report generation
 # ────────────────────────────────────────────────────────────────────────
 
 
@@ -856,20 +857,20 @@ def _build_markdown(
     repo_root: Path | None = None,
 ) -> str:
     """
-    Markdown 리포트 문자열을 생성한다.
+    Generates the Markdown report string.
 
     Args:
-        nodes: index.json 의 nodes 목록.
-        edges: index.json 의 edges 목록.
-        ci: ci-summary.json 전체 dict.
-        changed_paths: --changed 인자로 받은 파일 경로 목록.
+        nodes: nodes list from index.json.
+        edges: edges list from index.json.
+        ci: Full ci-summary.json dict.
+        changed_paths: File path list received via the --changed argument.
 
     Returns:
-        Markdown 리포트 문자열.
+        Markdown report string.
     """
     lines: list[str] = []
 
-    # 헤더
+    # Header
     lines.append("# Traceability Report (Phase 4)\n")
 
     # 1. Summary
@@ -883,10 +884,10 @@ def _build_markdown(
     verify_exit = ci.get("summary", {}).get("exit_code", 0)
 
     lines.append("## Summary\n")
-    lines.append("| 항목 | 수 |")
+    lines.append("| Item | Count |")
     lines.append("|---|---|")
-    lines.append(f"| 전체 노드 | {len(nodes)} |")
-    lines.append(f"| 전체 엣지 | {len(edges)} |")
+    lines.append(f"| Total nodes | {len(nodes)} |")
+    lines.append(f"| Total edges | {len(edges)} |")
     lines.append(f"| deterministic errors | {det_err} |")
     lines.append(f"| deterministic warnings | {det_warn} |")
     lines.append(f"| semantic candidates | {sem_cand} |")
@@ -895,15 +896,15 @@ def _build_markdown(
     lines.append(f"| verify exit code | {verify_exit} |")
     lines.append("")
 
-    lines.append("### 노드 타입별 카운트\n")
-    lines.append("| 노드 타입 | 수 |")
+    lines.append("### Count by Node Type\n")
+    lines.append("| Node type | Count |")
     lines.append("|---|---|")
     for nt, cnt in sorted(node_type_count.items()):
         lines.append(f"| {nt} | {cnt} |")
     lines.append("")
 
-    lines.append("### 엣지 타입별 카운트\n")
-    lines.append("| 엣지 타입 | 수 |")
+    lines.append("### Count by Edge Type\n")
+    lines.append("| Edge type | Count |")
     lines.append("|---|---|")
     for et, cnt in sorted(edge_type_count.items()):
         lines.append(f"| {et} | {cnt} |")
@@ -913,9 +914,9 @@ def _build_markdown(
     lines.append("## Failure Findings (CI Hard Gate)\n")
     det_errors = ci.get("categories", {}).get("deterministic", {}).get("errors", [])
     if not det_errors:
-        lines.append("> **0건, CI green** -- deterministic error 없음. CI gate 통과.")
+        lines.append("> **0 findings, CI green** -- no deterministic errors. CI gate passed.")
     else:
-        lines.append("| kind | subject | source 위치 | message |")
+        lines.append("| kind | subject | source location | message |")
         lines.append("|---|---|---|---|")
         for f in det_errors:
             subject = _escape_md(f.get("subject") or "")
@@ -927,15 +928,17 @@ def _build_markdown(
 
     # 3. Semantic drift candidates (agent review)
     lines.append("## Semantic Drift Candidates (Agent Review)\n")
-    lines.append("> CI 실패 아님 -- 에이전트/사람 검토 항목. hard gate에 영향 없음.\n")
+    lines.append(
+        "> Not a CI failure -- item for agent/human review. Does not affect the hard gate.\n"
+    )
     sem_candidates = ci.get("categories", {}).get("semantic_candidate", [])
     orphans = [f for f in sem_candidates if f.get("kind") == "orphan"]
     api_unlinked = [f for f in sem_candidates if f.get("kind") == "api_unlinked"]
     others = [f for f in sem_candidates if f.get("kind") not in ("orphan", "api_unlinked")]
 
     if api_unlinked:
-        lines.append(f"### API Unlinked ({len(api_unlinked)}건)\n")
-        lines.append("| subject (노드 id) | source 파일 | message |")
+        lines.append(f"### API Unlinked ({len(api_unlinked)})\n")
+        lines.append("| subject (node id) | source file | message |")
         lines.append("|---|---|---|")
         for f in api_unlinked[:30]:
             subject = _escape_md(f.get("subject") or "")
@@ -943,12 +946,12 @@ def _build_markdown(
             msg = _escape_md(f.get("message") or "")
             lines.append(f"| {subject} | {loc} | {msg} |")
         if len(api_unlinked) > 30:
-            lines.append(f"| _(+{len(api_unlinked) - 30}건 생략)_ | | |")
+            lines.append(f"| _(+{len(api_unlinked) - 30} more omitted)_ | | |")
         lines.append("")
 
     if orphans:
-        lines.append(f"### Orphan Must Requirements ({len(orphans)}건)\n")
-        lines.append("| subject (노드 id) | source 파일 | message |")
+        lines.append(f"### Orphan Must Requirements ({len(orphans)})\n")
+        lines.append("| subject (node id) | source file | message |")
         lines.append("|---|---|---|")
         for f in orphans[:20]:
             subject = _escape_md(f.get("subject") or "")
@@ -956,11 +959,11 @@ def _build_markdown(
             msg = _escape_md(f.get("message") or "")
             lines.append(f"| {subject} | {loc} | {msg} |")
         if len(orphans) > 20:
-            lines.append(f"| _(+{len(orphans) - 20}건 생략)_ | | |")
+            lines.append(f"| _(+{len(orphans) - 20} more omitted)_ | | |")
         lines.append("")
 
     if others:
-        lines.append(f"### 기타 semantic_candidate ({len(others)}건)\n")
+        lines.append(f"### Other semantic_candidate ({len(others)})\n")
         for f in others:
             subject = _escape_md(f.get("subject") or "")
             loc = _escape_md(f.get("location") or "")
@@ -972,10 +975,10 @@ def _build_markdown(
     lines.append("## Orphan List (Must Requirements)\n")
     orphan_list = orphans
     if not orphan_list:
-        lines.append("_(없음)_")
+        lines.append("_(none)_")
     else:
-        lines.append(f"Must requirement 중 edge 카테고리 일부 미연결: **{len(orphan_list)}건**\n")
-        lines.append("| 노드 id | source 파일 | 누락 edge 카테고리 |")
+        lines.append(f"Must requirements missing some edge category: **{len(orphan_list)}**\n")
+        lines.append("| Node id | Source file | Missing edge category |")
         lines.append("|---|---|---|")
         for f in sorted(orphan_list, key=lambda x: x.get("subject") or ""):
             subject = _escape_md(f.get("subject") or "")
@@ -993,16 +996,14 @@ def _build_markdown(
     coverage_gaps = [f for f in cov_findings if f.get("kind") == "coverage_gap"]
     drifts = [f for f in cov_findings if f.get("kind") == "test_coverage_drift"]
 
+    lines.append(f"- coverage_gap: **{len(coverage_gaps)}** (checklist UC has no validates edge)")
     lines.append(
-        f"- coverage_gap: **{len(coverage_gaps)}건** (체크리스트 UC에 validates edge 없음)"
-    )
-    lines.append(
-        f"- test_coverage_drift: **{len(drifts)}건** (테스트 마커가 체크리스트 미등재 UC 참조)\n"
+        f"- test_coverage_drift: **{len(drifts)}** (test marker references a UC not on the checklist)\n"
     )
 
     if drifts:
-        lines.append(f"### Test Coverage Drift (마커 드리프트) -- {len(drifts)}건\n")
-        lines.append("| subject (UC id) | source (test 노드 id) | message |")
+        lines.append(f"### Test Coverage Drift (marker drift) -- {len(drifts)}\n")
+        lines.append("| subject (UC id) | source (test node id) | message |")
         lines.append("|---|---|---|")
         for f in drifts:
             subject = _escape_md(f.get("subject") or "")
@@ -1012,8 +1013,8 @@ def _build_markdown(
         lines.append("")
 
     if coverage_gaps:
-        lines.append(f"### Coverage Gap ({len(coverage_gaps)}건)\n")
-        lines.append("| 노드 id (UseCase) | source 파일 | message |")
+        lines.append(f"### Coverage Gap ({len(coverage_gaps)})\n")
+        lines.append("| Node id (UseCase) | Source file | message |")
         lines.append("|---|---|---|")
         for f in coverage_gaps[:30]:
             subject = _escape_md(f.get("subject") or "")
@@ -1021,26 +1022,26 @@ def _build_markdown(
             msg = _escape_md(f.get("message") or "")
             lines.append(f"| {subject} | {loc} | {msg} |")
         if len(coverage_gaps) > 30:
-            lines.append(f"| _(+{len(coverage_gaps) - 30}건 생략)_ | | |")
+            lines.append(f"| _(+{len(coverage_gaps) - 30} more omitted)_ | | |")
         lines.append("")
 
     # 6. Changed-file impact
-    lines.append("## Changed-File Impact 후보\n")
+    lines.append("## Changed-File Impact Candidates\n")
     if not changed_paths:
         lines.append(
-            "_(--changed 인자 없음. "
-            "`python3 tools/traceability/report.py --changed <path>` 로 실행 시 채워짐.)_"
+            "_(No --changed argument. "
+            "Filled in when run with `python3 tools/traceability/report.py --changed <path>`.)_"
         )
     else:
         direct_nodes, neighbor_nodes = _compute_impact(nodes, edges, changed_paths)
         cp_str = "`, `".join(changed_paths)
-        lines.append(f"변경 파일: `{cp_str}`\n")
-        lines.append(f"- 직접 연결 노드 (direct): **{len(direct_nodes)}건**")
-        lines.append(f"- 1-hop 이웃 노드 (neighbor): **{len(neighbor_nodes)}건**\n")
+        lines.append(f"Changed files: `{cp_str}`\n")
+        lines.append(f"- Directly connected nodes (direct): **{len(direct_nodes)}**")
+        lines.append(f"- 1-hop neighbor nodes (neighbor): **{len(neighbor_nodes)}**\n")
 
         if direct_nodes:
-            lines.append("### 직접 영향 노드 (Direct)\n")
-            lines.append("| 노드 id | 타입 | source 파일 |")
+            lines.append("### Directly Affected Nodes (Direct)\n")
+            lines.append("| Node id | Type | Source file |")
             lines.append("|---|---|---|")
             for n in sorted(direct_nodes, key=lambda x: x["id"])[:30]:
                 nid = _escape_md(n["id"])
@@ -1048,12 +1049,12 @@ def _build_markdown(
                 sf = _escape_md(n.get("source_file", ""))
                 lines.append(f"| {nid} | {ntype} | {sf} |")
             if len(direct_nodes) > 30:
-                lines.append(f"| _(+{len(direct_nodes) - 30}건 생략)_ | | |")
+                lines.append(f"| _(+{len(direct_nodes) - 30} more omitted)_ | | |")
             lines.append("")
 
         if neighbor_nodes:
-            lines.append("### 1-Hop 이웃 노드 (Neighbor)\n")
-            lines.append("| 노드 id | 타입 | source 파일 |")
+            lines.append("### 1-Hop Neighbor Nodes (Neighbor)\n")
+            lines.append("| Node id | Type | Source file |")
             lines.append("|---|---|---|")
             for n in sorted(neighbor_nodes, key=lambda x: x["id"])[:20]:
                 nid = _escape_md(n["id"])
@@ -1061,25 +1062,27 @@ def _build_markdown(
                 sf = _escape_md(n.get("source_file", ""))
                 lines.append(f"| {nid} | {ntype} | {sf} |")
             if len(neighbor_nodes) > 20:
-                lines.append(f"| _(+{len(neighbor_nodes) - 20}건 생략)_ | | |")
+                lines.append(f"| _(+{len(neighbor_nodes) - 20} more omitted)_ | | |")
             lines.append("")
 
     # 7. Seed Traces (Phase 7)
     lines.append("## Seed Traces\n")
     lines.append(
-        "> Phase 7 핵심 trace seed -- 각 seed 의 layer node id + source 경로 + 연결 상태\n"
+        "> Phase 7 core trace seed -- each seed's layer node id + source path + connection status\n"
     )
     _seed_traces_section = _build_seed_traces_section(nodes, edges, ci, repo_root)
     lines.extend(_seed_traces_section)
     lines.append("")
 
-    # 8. Sample Trace Path (seed-traces.yml 첫 seed 기준)
+    # 8. Sample Trace Path (based on the first seed in seed-traces.yml)
     trace = _build_sample_trace(nodes, edges, repo_root)
     if trace:
         lines.append("## Sample Trace Path\n")
-        lines.append("> 첫 seed trace 기준 핵심 경로 -- node id + source 파일 경로 포함\n")
         lines.append(
-            "> _(미연결)_ = 해당 층 노드는 인덱스에 존재하지만 직접 edge로 연결되지 않음.\n"
+            "> Core path based on the first seed trace -- includes node id + source file path\n"
+        )
+        lines.append(
+            "> _(unlinked)_ = the node for that layer exists in the index but isn't connected by a direct edge.\n"
         )
 
         for i, step in enumerate(trace):
@@ -1093,8 +1096,8 @@ def _build_markdown(
                 lines.append(f"   - edge: _{edge_label}_")
             lines.append("")
 
-        lines.append("### 트레이스 층별 연결 상태 요약\n")
-        lines.append("| 층 | 노드 id | 타입 | source 파일 | 연결 상태 |")
+        lines.append("### Connection Status Summary by Trace Layer\n")
+        lines.append("| Layer | Node id | Type | Source file | Connection status |")
         lines.append("|---|---|---|---|---|")
         for i, step in enumerate(trace):
             layer = step.get("layer", "") or f"L{i + 1}"
@@ -1102,23 +1105,23 @@ def _build_markdown(
             ntype = _escape_md(step["type"])
             sf = _escape_md(step["source_file"])
             note = step.get("note", "")
-            status = note if note else "직접 edge 연결"
+            status = note if note else "direct edge connected"
             lines.append(f"| {_escape_md(layer)} | {nid} | {ntype} | {sf} | {status} |")
         lines.append("")
 
     lines.append("---")
-    lines.append("_Phase 4 리포트. 생성: `python3 tools/traceability/report.py`_")
+    lines.append("_Phase 4 report. Generated by: `python3 tools/traceability/report.py`_")
 
     return "\n".join(lines)
 
 
 # ────────────────────────────────────────────────────────────────────────
-# HTML 리포트 생성 (self-contained)
+# HTML report generation (self-contained)
 # ────────────────────────────────────────────────────────────────────────
 
 
 def _finding_rows_html(findings: list[dict[str, Any]], limit: int = 30) -> str:
-    """finding 목록을 HTML table rows로 변환한다."""
+    """Converts the finding list into HTML table rows."""
     rows = []
     for f in findings[:limit]:
         kind = _escape_html(f.get("kind", ""))
@@ -1141,9 +1144,9 @@ def _finding_rows_html(findings: list[dict[str, Any]], limit: int = 30) -> str:
         )
     if len(findings) > limit:
         rows.append(
-            "<tr><td colspan='4' class='muted'>... 추가 "
+            "<tr><td colspan='4' class='muted'>... "
             + str(len(findings) - limit)
-            + "건 생략</td></tr>"
+            + " more omitted</td></tr>"
         )
     return "\n".join(rows)
 
@@ -1156,21 +1159,21 @@ def _build_html(
     repo_root: Path | None = None,
 ) -> str:
     """
-    self-contained interactive HTML 리포트를 생성한다.
+    Generates a self-contained interactive HTML report.
 
-    외부 CDN/네트워크 의존 0. CSS/JS 인라인.
-    데이터는 빌드 타임 인라인 (런타임 fetch 없음).
+    Zero external CDN/network dependency. CSS/JS inlined.
+    Data is inlined at build time (no runtime fetch).
 
     Args:
-        nodes: index.json 의 nodes 목록.
-        edges: index.json 의 edges 목록.
-        ci: ci-summary.json 전체 dict.
-        changed_paths: --changed 인자 파일 경로 목록.
+        nodes: nodes list from index.json.
+        edges: edges list from index.json.
+        ci: Full ci-summary.json dict.
+        changed_paths: File path list from the --changed argument.
 
     Returns:
-        HTML 문자열.
+        HTML string.
     """
-    # 통계
+    # Statistics
     node_type_count: Counter[str] = Counter(n["type"] for n in nodes)
     edge_type_count: Counter[str] = Counter(e["type"] for e in edges)
     det_err = ci.get("deterministic_error_count", 0)
@@ -1179,7 +1182,7 @@ def _build_html(
     total_f = ci.get("total_findings", 0)
     verify_exit = ci.get("summary", {}).get("exit_code", 0)
 
-    # finding 분류
+    # Classify findings
     det_errors = ci.get("categories", {}).get("deterministic", {}).get("errors", [])
     sem_candidates = ci.get("categories", {}).get("semantic_candidate", [])
     cov_findings = ci.get("categories", {}).get("coverage", [])
@@ -1188,7 +1191,7 @@ def _build_html(
     coverage_gaps = [f for f in cov_findings if f.get("kind") == "coverage_gap"]
     drifts = [f for f in cov_findings if f.get("kind") == "test_coverage_drift"]
 
-    # 트레이스 데이터
+    # Trace data
     trace = _build_sample_trace(nodes, edges, repo_root)
 
     # changed-file impact
@@ -1197,7 +1200,7 @@ def _build_html(
     if changed_paths:
         direct_nodes, neighbor_nodes = _compute_impact(nodes, edges, changed_paths)
 
-    # 데이터 JSON 인라인 (빌드 타임)
+    # Inline data JSON (build time)
     all_node_types = sorted(node_type_count.keys())
     nodes_for_js = [
         {
@@ -1235,20 +1238,20 @@ def _build_html(
     ci_error_rows = (
         _finding_rows_html(det_errors)
         if det_errors
-        else "<tr><td colspan='4' class='green'>0건, CI green</td></tr>"
+        else "<tr><td colspan='4' class='green'>0 findings, CI green</td></tr>"
     )
     api_unlinked_rows = _finding_rows_html(api_unlinked, 25)
     orphan_rows = _finding_rows_html(orphans, 25)
     drift_rows = _finding_rows_html(drifts)
     gap_rows = _finding_rows_html(coverage_gaps, 30)
 
-    # 트레이스 HTML rows (서버사이드 렌더)
+    # Trace HTML rows (server-side render)
     trace_html_rows = []
     for i, step in enumerate(trace):
         layer = step.get("layer", "") or f"L{i + 1}"
         note = step.get("note", "")
         status_class = "unlinked" if note else "linked"
-        status_text = _escape_html(note) if note else "직접 edge 연결"
+        status_text = _escape_html(note) if note else "direct edge connected"
         step_id = _escape_html(step.get("id", ""))
         step_type = step.get("type", "")
         step_type_esc = _escape_html(step_type)
@@ -1286,7 +1289,7 @@ def _build_html(
     impact_html_rows: list[str] = []
     if direct_nodes:
         impact_html_rows.append(
-            "<tr><th colspan='3' class='section-header'>직접 영향 노드 (Direct)</th></tr>"
+            "<tr><th colspan='3' class='section-header'>Directly Affected Nodes (Direct)</th></tr>"
         )
         for n in direct_nodes[:30]:
             impact_html_rows.append(
@@ -1302,7 +1305,7 @@ def _build_html(
             )
     if neighbor_nodes:
         impact_html_rows.append(
-            "<tr><th colspan='3' class='section-header'>1-Hop 이웃 노드 (Neighbor)</th></tr>"
+            "<tr><th colspan='3' class='section-header'>1-Hop Neighbor Nodes (Neighbor)</th></tr>"
         )
         for n in neighbor_nodes[:20]:
             impact_html_rows.append(
@@ -1319,10 +1322,10 @@ def _build_html(
     impact_html = (
         "\n".join(impact_html_rows)
         if impact_html_rows
-        else "<tr><td colspan='3' class='muted'>--changed 인자 없음</td></tr>"
+        else "<tr><td colspan='3' class='muted'>No --changed argument</td></tr>"
     )
 
-    # 바 차트 HTML (순수 CSS)
+    # Bar chart HTML (pure CSS)
     total_nodes = len(nodes)
     bar_rows_html = []
     for nt in sorted(node_type_count.keys()):
@@ -1345,7 +1348,7 @@ def _build_html(
         )
     bar_html = "\n".join(bar_rows_html)
 
-    # 엣지 타입 테이블 rows
+    # Edge type table rows
     edge_rows_html = []
     for et, cnt in sorted(edge_type_count.items()):
         edge_rows_html.append(
@@ -1353,12 +1356,12 @@ def _build_html(
         )
     edge_table_rows = "\n".join(edge_rows_html)
 
-    # CI status 색상
+    # CI status color
     det_err_class = "val-red" if det_err > 0 else "val-green"
     exit_class = "val-green" if verify_exit == 0 else "val-red"
-    ci_status_text = "0건, CI green" if det_err == 0 else (str(det_err) + "건 오류")
+    ci_status_text = "0 findings, CI green" if det_err == 0 else (str(det_err) + " errors")
 
-    # HTML 템플릿
+    # HTML template
     parts: list[str] = []
     parts.append("<!doctype html>")
     parts.append('<html lang="ko">')
@@ -1624,15 +1627,15 @@ tr:hover td { background: #faf8f3; }
     parts.append("<header>")
     parts.append("<h1>Traceability Report -- Phase 4</h1>")
     parts.append(
-        "<div class='meta'>노드 "
+        "<div class='meta'>nodes "
         + str(len(nodes))
-        + "개 &middot; 엣지 "
+        + " &middot; edges "
         + str(len(edges))
-        + "개 &middot; findings "
+        + " &middot; findings "
         + str(total_f)
-        + "건 &middot; verify exit "
+        + " &middot; verify exit "
         + str(verify_exit)
-        + " &middot; 생성: <code>python3 tools/traceability/report.py</code></div>"
+        + " &middot; generated: <code>python3 tools/traceability/report.py</code></div>"
     )
     parts.append("</header>")
     parts.append("<nav>")
@@ -1645,7 +1648,7 @@ tr:hover td { background: #faf8f3; }
         ("seed-graph", "Seed Graph"),
         ("seed-traces", "Seed Traces"),
         ("trace", "Sample Trace"),
-        ("nodes", "노드 탐색"),
+        ("nodes", "Node Explorer"),
     ]:
         parts.append('<a href="#' + anchor + '">' + label + "</a>")
     parts.append("</nav>")
@@ -1656,8 +1659,8 @@ tr:hover td { background: #faf8f3; }
     parts.append("<h2>Summary <span class='badge-section badge-info'>Overview</span></h2>")
     parts.append('<div class="summary-grid">')
     stat_cards = [
-        (str(len(nodes)), "전체 노드", "val-blue"),
-        (str(len(edges)), "전체 엣지", "val-blue"),
+        (str(len(nodes)), "Total nodes", "val-blue"),
+        (str(len(edges)), "Total edges", "val-blue"),
         (str(det_err), "CI errors", det_err_class),
         (str(sem_cand), "Semantic candidates", "val-amber"),
         (str(cov_count), "Coverage findings", "val-amber"),
@@ -1677,10 +1680,10 @@ tr:hover td { background: #faf8f3; }
             + "</div>"
         )
     parts.append("</div>")
-    parts.append("<h3>노드 타입별 분포</h3>")
+    parts.append("<h3>Distribution by Node Type</h3>")
     parts.append(bar_html)
-    parts.append("<h3 style='margin-top:16px'>엣지 타입별 카운트</h3>")
-    parts.append("<table><thead><tr><th>엣지 타입</th><th>수</th></tr></thead><tbody>")
+    parts.append("<h3 style='margin-top:16px'>Count by Edge Type</h3>")
+    parts.append("<table><thead><tr><th>Edge type</th><th>Count</th></tr></thead><tbody>")
     parts.append(edge_table_rows)
     parts.append("</tbody></table>")
     parts.append("</section>")
@@ -1692,13 +1695,13 @@ tr:hover td { background: #faf8f3; }
     )
     parts.append(
         "<p style='font-size:12px;color:var(--muted);margin-bottom:12px;'>"
-        + "<strong>deterministic</strong> 카테고리 -- severity=error -&gt; CI 실패 (exit 1). 현재 <strong>"
+        + "<strong>deterministic</strong> category -- severity=error -&gt; CI failure (exit 1). Currently <strong>"
         + ci_status_text
         + "</strong>.</p>"
     )
     parts.append(
-        "<table><thead><tr><th>kind</th><th>subject (노드 id)</th>"
-        + "<th>source 위치</th><th>message</th></tr></thead><tbody>"
+        "<table><thead><tr><th>kind</th><th>subject (node id)</th>"
+        + "<th>source location</th><th>message</th></tr></thead><tbody>"
     )
     parts.append(ci_error_rows)
     parts.append("</tbody></table>")
@@ -1711,25 +1714,25 @@ tr:hover td { background: #faf8f3; }
     )
     parts.append(
         "<p style='font-size:12px;color:var(--muted);margin-bottom:12px;'>"
-        + "<strong>semantic_candidate</strong> 카테고리 -- CI 실패 아님. 에이전트/사람 검토 항목. "
+        + "<strong>semantic_candidate</strong> category -- not a CI failure. Item for agent/human review. "
         + "api_unlinked: <strong>"
         + str(len(api_unlinked))
-        + "건</strong> &middot; "
+        + "</strong> &middot; "
         + "orphan: <strong>"
         + str(len(orphans))
-        + "건</strong></p>"
+        + "</strong></p>"
     )
-    parts.append("<h3>API Unlinked (" + str(len(api_unlinked)) + "건)</h3>")
+    parts.append("<h3>API Unlinked (" + str(len(api_unlinked)) + ")</h3>")
     parts.append(
-        "<table><thead><tr><th>kind</th><th>subject (노드 id)</th>"
-        + "<th>source 파일</th><th>message</th></tr></thead><tbody>"
+        "<table><thead><tr><th>kind</th><th>subject (node id)</th>"
+        + "<th>source file</th><th>message</th></tr></thead><tbody>"
     )
     parts.append(api_unlinked_rows)
     parts.append("</tbody></table>")
-    parts.append("<h3>Orphan Must Requirements (" + str(len(orphans)) + "건)</h3>")
+    parts.append("<h3>Orphan Must Requirements (" + str(len(orphans)) + ")</h3>")
     parts.append(
-        "<table><thead><tr><th>kind</th><th>subject (노드 id)</th>"
-        + "<th>source 파일</th><th>누락 edge</th></tr></thead><tbody>"
+        "<table><thead><tr><th>kind</th><th>subject (node id)</th>"
+        + "<th>source file</th><th>missing edge</th></tr></thead><tbody>"
     )
     parts.append(orphan_rows)
     parts.append("</tbody></table>")
@@ -1742,22 +1745,22 @@ tr:hover td { background: #faf8f3; }
         "<p style='font-size:12px;color:var(--muted);margin-bottom:12px;'>"
         + "coverage_gap: <strong>"
         + str(len(coverage_gaps))
-        + "건</strong> &middot; "
-        + "test_coverage_drift (마커 드리프트): <strong>"
+        + "</strong> &middot; "
+        + "test_coverage_drift (marker drift): <strong>"
         + str(len(drifts))
-        + "건</strong></p>"
+        + "</strong></p>"
     )
-    parts.append("<h3>Test Coverage Drift -- " + str(len(drifts)) + "건</h3>")
+    parts.append("<h3>Test Coverage Drift -- " + str(len(drifts)) + "</h3>")
     parts.append(
         "<table><thead><tr><th>kind</th><th>subject (UC id)</th>"
         + "<th>source (test)</th><th>message</th></tr></thead><tbody>"
     )
     parts.append(drift_rows)
     parts.append("</tbody></table>")
-    parts.append("<h3>Coverage Gap -- " + str(len(coverage_gaps)) + "건</h3>")
+    parts.append("<h3>Coverage Gap -- " + str(len(coverage_gaps)) + "</h3>")
     parts.append(
         "<table><thead><tr><th>kind</th><th>subject (UseCase id)</th>"
-        + "<th>source 파일</th><th>message</th></tr></thead><tbody>"
+        + "<th>source file</th><th>message</th></tr></thead><tbody>"
     )
     parts.append(gap_rows)
     parts.append("</tbody></table>")
@@ -1766,16 +1769,16 @@ tr:hover td { background: #faf8f3; }
     # Changed-file Impact section
     parts.append('<section id="impact">')
     parts.append(
-        "<h2>Changed-File Impact 후보 <span class='badge-section badge-info'>--changed</span></h2>"
+        "<h2>Changed-File Impact Candidates <span class='badge-section badge-info'>--changed</span></h2>"
     )
     parts.append(
         "<p style='font-size:12px;color:var(--muted);margin-bottom:12px;'>"
-        + "변경 파일: <code id='changed-list'>"
+        + "Changed files: <code id='changed-list'>"
         + impact_changed_str
         + "</code></p>"
     )
     parts.append(
-        "<table><thead><tr><th>노드 id</th><th>타입</th><th>source 파일</th></tr></thead><tbody>"
+        "<table><thead><tr><th>Node id</th><th>Type</th><th>Source file</th></tr></thead><tbody>"
     )
     parts.append(impact_html)
     parts.append("</tbody></table>")
@@ -1786,8 +1789,8 @@ tr:hover td { background: #faf8f3; }
     parts.append("<h2>Seed Trace Graph <span class='badge-section badge-info'>Visual</span></h2>")
     parts.append(
         "<p style='font-size:12px;color:var(--muted);margin-bottom:12px;'>"
-        + "seed-traces.yml 의 인접 layer 연결을 SVG 그래프로 표시한다. "
-        + "빨간 점선은 missing link 후보이며, 아래 표의 gap 상태와 같은 근거를 사용한다.</p>"
+        + "Displays seed-traces.yml's adjacent layer connections as an SVG graph. "
+        + "The red dashed line marks missing link candidates and shares the same basis as the gap status in the table below.</p>"
     )
     parts.append('<div class="seed-graph-toolbar">')
     parts.append(
@@ -1798,7 +1801,7 @@ tr:hover td { background: #faf8f3; }
     )
     parts.append(
         '<div class="seed-graph-legend">'
-        + '<span class="legend-item"><span class="legend-line"></span>직접 edge</span>'
+        + '<span class="legend-item"><span class="legend-line"></span>direct edge</span>'
         + '<span class="legend-item"><span class="legend-line legend-manual"></span>manual edge</span>'
         + '<span class="legend-item"><span class="legend-line legend-gap"></span>missing link</span>'
         + "</div>"
@@ -1820,59 +1823,59 @@ tr:hover td { background: #faf8f3; }
     parts.append("<h2>Seed Traces <span class='badge-section badge-info'>Phase 7</span></h2>")
     parts.append(
         "<p style='font-size:12px;color:var(--muted);margin-bottom:12px;'>"
-        + "7개 핵심 trace seed. 각 seed 는 requirement → ADR → usecase/sequence → API → code → test "
-        + "중 최소 5개 층을 연결한다. "
-        + "<em>(gap)</em> = 인접 layer 간 edge 미연결 (warn, CI 실패 아님).</p>"
+        + "7 core trace seeds. Each seed connects at least 5 of the layers "
+        + "requirement → ADR → usecase/sequence → API → code → test. "
+        + "<em>(gap)</em> = adjacent layers not connected by an edge (warn, not a CI failure).</p>"
     )
-    # seed trace 테이블 (서버사이드 렌더)
+    # seed trace table (server-side render)
     _seed_rows_html = _build_seed_traces_html(nodes, edges, ci, repo_root)
     parts.append(_seed_rows_html)
     parts.append("</section>")
 
-    # Sample Trace section (seed-traces.yml 첫 seed 기준; seed 없으면 생략)
+    # Sample Trace section (based on the first seed in seed-traces.yml; omitted if no seed)
     if trace:
         _trace_anchor = _escape_html(trace[0].get("id", ""))
         parts.append('<section id="trace">')
         parts.append(
             "<h2>Sample Trace Path "
-            f"<span class='badge-section badge-info'>{_trace_anchor} 기점</span></h2>"
+            f"<span class='badge-section badge-info'>{_trace_anchor} start</span></h2>"
         )
         parts.append(
             "<p style='font-size:12px;color:var(--muted);margin-bottom:12px;'>"
-            + "첫 seed trace 기준 핵심 경로. "
-            + "<em>(미연결)</em> = 해당 층 노드는 인덱스에 존재하지만 직접 edge로 연결되지 않음.</p>"
+            + "Core path based on the first seed trace. "
+            + "<em>(unlinked)</em> = the node for that layer exists in the index but isn't connected by a direct edge.</p>"
         )
         parts.append('<div class="trace-chain" id="trace-chain">')
         parts.append('<div id="trace-steps-rendered"></div>')
         parts.append("</div>")
         parts.append(
-            "<table><thead><tr><th>층</th><th>노드 id</th><th>타입</th>"
-            + "<th>source 파일</th><th>연결 상태</th></tr></thead><tbody>"
+            "<table><thead><tr><th>Layer</th><th>Node id</th><th>Type</th>"
+            + "<th>Source file</th><th>Connection status</th></tr></thead><tbody>"
         )
         parts.append(trace_html)
         parts.append("</tbody></table>")
         parts.append("</section>")
 
-    # 노드 탐색 section (필터)
+    # Node Explorer section (filter)
     parts.append('<section id="nodes">')
-    parts.append("<h2>노드 탐색 <span class='badge-section badge-info'>Filter</span></h2>")
+    parts.append("<h2>Node Explorer <span class='badge-section badge-info'>Filter</span></h2>")
     parts.append(
         "<p style='font-size:12px;color:var(--muted);margin-bottom:8px;'>"
-        + "노드 타입 토글로 표시/숨김. 총 <span id='visible-count'>"
+        + "Toggle node types to show/hide. Total <span id='visible-count'>"
         + str(len(nodes))
         + "</span> / "
         + str(len(nodes))
-        + "개 표시.</p>"
+        + " nodes shown.</p>"
     )
     parts.append('<div class="filter-panel" id="filter-panel">')
     parts.append('<div id="filter-checkboxes"></div>')
     parts.append('<div class="filter-actions">')
-    parts.append('<button class="btn-sm" onclick="setAll(true)">전체 선택</button>')
-    parts.append('<button class="btn-sm" onclick="setAll(false)">전체 해제</button>')
+    parts.append('<button class="btn-sm" onclick="setAll(true)">Select All</button>')
+    parts.append('<button class="btn-sm" onclick="setAll(false)">Deselect All</button>')
     parts.append("</div></div>")
     parts.append(
         '<div id="node-search-wrap" style="margin-bottom:10px;">'
-        + '<input id="node-search" type="text" placeholder="노드 id 또는 파일 경로 검색..."'
+        + '<input id="node-search" type="text" placeholder="Search node id or file path..."'
         + ' style="width:100%;padding:6px 10px;border:1px solid var(--line);border-radius:4px;'
         + 'font-size:13px;background:var(--surface);" oninput="applyFilter()"></div>'
     )
@@ -1880,22 +1883,22 @@ tr:hover td { background: #faf8f3; }
     parts.append('<table id="node-table">')
     parts.append(
         "<thead><tr>"
-        + "<th style='width:280px'>노드 id</th>"
-        + "<th style='width:130px'>타입</th>"
-        + "<th>source 파일</th></tr></thead>"
+        + "<th style='width:280px'>Node id</th>"
+        + "<th style='width:130px'>Type</th>"
+        + "<th>Source file</th></tr></thead>"
     )
     parts.append('<tbody id="node-tbody"></tbody>')
     parts.append("</table></div>")
     parts.append(
         '<p id="node-table-hint" style="font-size:11px;color:var(--muted);margin-top:6px;">'
-        + "최대 500행 표시.</p>"
+        + "Showing up to 500 rows.</p>"
     )
     parts.append("</section>")
     parts.append("</div>")  # /container
 
-    # 인라인 JS
+    # Inline JS
     parts.append("<script>")
-    parts.append("/* 빌드 타임 인라인 데이터 -- 런타임 fetch 없음 */")
+    parts.append("/* Build-time inlined data -- no runtime fetch */")
     parts.append("var NODES = " + nodes_json + ";")
     parts.append("var ALL_TYPES = " + all_types_json + ";")
     parts.append("var TRACE_DATA = " + trace_json + ";")
@@ -1904,7 +1907,7 @@ tr:hover td { background: #faf8f3; }
     parts.append("var DIRECT_NODES = " + direct_nodes_json + ";")
     parts.append("var NEIGHBOR_NODES = " + neighbor_nodes_json + ";")
     parts.append("""
-/* 노드 타입 필터 UI */
+/* Node type filter UI */
 var activeTypes = new Set(ALL_TYPES);
 var searchQuery = "";
 
@@ -1948,7 +1951,7 @@ function applyFilter() {
   document.getElementById("visible-count").textContent = visible;
 }
 
-/* 노드 테이블 렌더링 */
+/* Node table rendering */
 function renderNodeTable() {
   var tbody = document.getElementById("node-tbody");
   var MAX = 500;
@@ -1986,11 +1989,11 @@ function renderNodeTable() {
   tbody.appendChild(frag);
 }
 
-/* 트레이스 체인 렌더링 */
+/* Trace chain rendering */
 function renderTraceChain() {
   var container = document.getElementById("trace-steps-rendered");
   var layerLabels = [
-    "L1 요구사항", "L2 ADR", "L3 ApiOperation",
+    "L1 Requirement", "L2 ADR", "L3 ApiOperation",
     "L4a ConsentsService", "L4b AuthService",
     "L5a TestCase", "L5b TestCase"
   ];
@@ -2012,7 +2015,7 @@ function renderTraceChain() {
   });
 }
 
-/* Seed trace graph 렌더링 */
+/* Seed trace graph rendering */
 function clearElement(el) {
   while (el && el.firstChild) {
     el.removeChild(el.firstChild);
@@ -2030,9 +2033,9 @@ function shortText(value, maxLen) {
 }
 
 function linkStatusLabel(status) {
-  if (status === "direct") { return "직접 edge"; }
+  if (status === "direct") { return "direct edge"; }
   if (status === "manual") { return "manual edge"; }
-  if (status === "indirect") { return "간접 edge (≤2-hop)"; }
+  if (status === "indirect") { return "indirect edge (<=2-hop)"; }
   if (status === "gap") { return "missing edge"; }
   if (status === "missing_node") { return "missing node"; }
   return status || "unknown";
@@ -2072,7 +2075,7 @@ function renderSeedNodeDetail(seed, nodeId) {
   var layer = findLayerByNode(seed, nodeId);
   if (!layer) {
     detailEl.className = "seed-node-detail seed-graph-empty";
-    detailEl.textContent = "표시할 노드 상세가 없습니다.";
+    detailEl.textContent = "No node details to display.";
     return;
   }
   detailEl.className = "seed-node-detail";
@@ -2116,7 +2119,7 @@ function buildSeedGraphSelector() {
 
   if (!SEED_GRAPHS.length) {
     var emptyOption = document.createElement("option");
-    emptyOption.textContent = "seed trace 없음";
+    emptyOption.textContent = "No seed trace";
     select.appendChild(emptyOption);
     return;
   }
@@ -2149,15 +2152,15 @@ function renderSeedGraph() {
     empty.setAttribute("x", "24");
     empty.setAttribute("y", "60");
     empty.setAttribute("class", "graph-node-source");
-    empty.textContent = "seed-traces.yml 없음 또는 로드 실패";
+    empty.textContent = "seed-traces.yml missing or failed to load";
     svg.appendChild(empty);
     if (findingsEl) {
       findingsEl.className = "seed-graph-findings seed-graph-empty";
-      findingsEl.textContent = "표시할 seed graph가 없습니다.";
+      findingsEl.textContent = "No seed graph to display.";
     }
     if (detailEl) {
       detailEl.className = "seed-node-detail seed-graph-empty";
-      detailEl.textContent = "표시할 노드 상세가 없습니다.";
+      detailEl.textContent = "No node details to display.";
     }
     return;
   }
@@ -2284,7 +2287,7 @@ function renderSeedGraph() {
   var missingStrong = document.createElement("strong");
   missingStrong.textContent = "Missing links";
   missingTitle.appendChild(missingStrong);
-  missingTitle.appendChild(document.createTextNode(": " + missingLinks.length + "건"));
+  missingTitle.appendChild(document.createTextNode(": " + missingLinks.length));
   findingsEl.appendChild(missingTitle);
 
   if (missingLinks.length) {
@@ -2302,7 +2305,7 @@ function renderSeedGraph() {
     var findingsStrong = document.createElement("strong");
     findingsStrong.textContent = "Verify findings";
     findingsTitle.appendChild(findingsStrong);
-    findingsTitle.appendChild(document.createTextNode(": " + seed.findings.length + "건"));
+    findingsTitle.appendChild(document.createTextNode(": " + seed.findings.length));
     findingsEl.appendChild(findingsTitle);
 
     var verifyList = document.createElement("ul");
@@ -2321,7 +2324,7 @@ function escHtml(s) {
     .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
-/* 초기화 */
+/* Initialize */
 buildCheckboxes();
 renderNodeTable();
 renderTraceChain();
@@ -2337,16 +2340,16 @@ applyFilter();
 
 
 # ────────────────────────────────────────────────────────────────────────
-# CLI 진입점
+# CLI entry point
 # ────────────────────────────────────────────────────────────────────────
 
 
 def _parse_args(argv: list[str]) -> list[str]:
     """
-    --changed <path> [<path> ...] 인자 파싱.
+    Parses the --changed <path> [<path> ...] argument.
 
     Returns:
-        변경 파일 경로 목록 (없으면 빈 리스트).
+        List of changed file paths (empty list if none).
     """
     changed: list[str] = []
     if "--changed" in argv:
@@ -2359,7 +2362,7 @@ def _parse_args(argv: list[str]) -> list[str]:
 
 
 def main() -> None:
-    """리포트 생성 메인 로직."""
+    """Main report-generation logic."""
     repo_root = _find_repo_root()
     scratch_dir = repo_root / "scratch" / "traceability"
     index_path = scratch_dir / "index.json"
@@ -2367,22 +2370,22 @@ def main() -> None:
 
     if not index_path.exists():
         print(
-            "[report] ERROR: index.json 없음. build_index.py 를 먼저 실행하세요.",
+            "[report] ERROR: index.json not found. Run build_index.py first.",
             file=sys.stderr,
         )
         sys.exit(1)
 
-    # CLI 인자 파싱
+    # Parse CLI arguments
     changed_paths = _parse_args(sys.argv[1:])
 
-    # index.json 로드
+    # Load index.json
     with index_path.open(encoding="utf-8") as f:
         data = json.load(f)
 
     nodes = data.get("nodes", [])
     edges = data.get("edges", [])
 
-    # ci-summary.json 로드 (없으면 기본값)
+    # Load ci-summary.json (defaults if missing)
     if ci_summary_path.exists():
         with ci_summary_path.open(encoding="utf-8") as f:
             ci = json.load(f)
@@ -2401,20 +2404,20 @@ def main() -> None:
             },
         }
 
-    # 산출 디렉토리 생성
+    # Create output directory
     scratch_dir.mkdir(parents=True, exist_ok=True)
 
-    # Markdown 리포트 생성
+    # Generate Markdown report
     md_text = _build_markdown(nodes, edges, ci, changed_paths, repo_root)
     md_path = scratch_dir / "report.md"
     md_path.write_text(md_text, encoding="utf-8")
 
-    # HTML 리포트 생성
+    # Generate HTML report
     html_text = _build_html(nodes, edges, ci, changed_paths, repo_root)
     html_path = scratch_dir / "report.html"
     html_path.write_text(html_text, encoding="utf-8")
 
-    # stdout 요약
+    # stdout summary
     print(
         "[report] nodes="
         + str(len(nodes))

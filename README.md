@@ -1,70 +1,70 @@
 # loplat-skills
 
-loplat 사내 범용 AI agent 스킬 모음. [SKILL.md 오픈 표준](https://cursor.com/docs/skills)을 따르므로 Claude Code, Codex CLI, Antigravity(agy), Gemini CLI, Cursor 등 런타임 종류에 관계없이 동작한다.
+Reusable, cross-runtime AI agent skills. Built on the [SKILL.md open standard](https://cursor.com/docs/skills), so they work in Claude Code, Codex CLI, Antigravity (agy), Gemini CLI, Cursor, and others regardless of runtime.
 
-## 스킬 목록
+## Skills
 
-| 스킬 | 용도 |
+| Skill | Purpose |
 |---|---|
-| `traceability-init` | 프로젝트를 분석해 traceability 온톨로지 기반(docs/ontology + tools/traceability)을 구성. config-driven 툴킷 동봉 |
-| `traceability-check` | 온톨로지가 구성된 repo의 정합성 hard gate 실행 (build_index → verify → report) |
+| `traceability-init` | Analyze a project and bootstrap a traceability ontology (docs/ontology + tools/traceability). Ships the config-driven toolkit; resource-agnostic via an agent-authored `ontology.yml`. |
+| `traceability-check` | Run the consistency hard gate on an ontology-configured repo (build_index → verify → report). |
 
-## 설치
+## Install
 
-**설치 스코프는 사용자가 판단한다.** 특정 프로젝트에서만 쓸 스킬은 프로젝트 스코프로, 모든 작업에서 쓸 스킬은 사용자 스코프로 설치한다.
+**You decide the install scope.** Install a project-specific skill at project scope; install a skill you want everywhere at user scope.
 
 ```sh
-git clone <이 repo> && cd loplat-skills
+git clone <this repo> && cd loplat-skills
 
-# 사용자 스코프 (~/.claude/skills, ~/.agents/skills)
+# User scope (~/.claude/skills, ~/.agents/skills)
 ./install.sh --user
 
-# 프로젝트 스코프 (<dir>/.claude/skills, <dir>/.agents/skills, <dir>/.cursor/skills)
+# Project scope (<dir>/.claude/skills, <dir>/.agents/skills, <dir>/.cursor/skills)
 ./install.sh --project ~/dev-workspace/my-service/main
 
-# 특정 스킬만 / symlink 모드(git pull만으로 갱신) / 미리보기
+# A single skill / symlink mode (updates on git pull alone) / preview
 ./install.sh --user --link traceability-init traceability-check
 ./install.sh --project . --dry-run
 ./install.sh --list
 ```
 
-| 런타임 | 읽는 위치 (사용자 / 프로젝트) |
+| Runtime | Read location (user / project) |
 |---|---|
 | Claude Code | `~/.claude/skills/` / `.claude/skills/` |
 | Codex · Antigravity · Gemini · OpenCode | `~/.agents/skills/` / `.agents/skills/` |
-| Cursor | (프로젝트 스코프만) `.cursor/skills/` |
-| 스킬 미지원 런타임 | 스킬이 프로젝트에 심는 `AGENTS.md` 섹션 + `docs/ontology/` 문서로 동작 |
+| Cursor | (project scope only) `.cursor/skills/` |
+| Skill-less runtimes | via the `AGENTS.md` section and `docs/ontology/` docs the skill plants in the project |
 
-**APM 사용자**: 이 repo는 APM 패키지이기도 하다.
+**APM users**: this repo is also an APM package.
 
 ```sh
-apm install -g <이 repo의 로컬 경로 또는 git ref> -t claude,codex,gemini,opencode,agent-skills
+apm install -g <local path or git ref of this repo> -t claude,codex,gemini,opencode,agent-skills
 ```
 
-## 갱신
+## Updating
 
-- copy 설치: `git pull` 후 `./install.sh` 재실행.
-- `--link` 설치: `git pull`만으로 갱신된다.
+- Copy install: `git pull`, then re-run `./install.sh`.
+- `--link` install: updates on `git pull` alone.
 
-## 새 스킬 추가 규약
+## Conventions for adding a skill
 
-1. `.apm/skills/<이름>/SKILL.md` 생성. frontmatter `name`, `description`(트리거 패턴 명시) 필수.
-2. **경로 이식성**: 홈 디렉토리·특정 머신의 절대 경로를 쓰지 않는다. 스킬이 참조하는 스크립트·정본·자산은 스킬 디렉토리 내부(`scripts/`, `references/`, `toolkit/` 등)에 두고 "이 스킬 디렉토리 기준" 상대 참조로 서술한다 — 설치 스코프·런타임마다 배포 위치가 다르기 때문이다.
-3. **runtime 중립성**: 특정 런타임 전용 도구(예: Claude 전용 Task/Workflow)를 절차의 필수 단계로 넣지 않는다. 필요하면 "가능한 runtime에서는 …" 조건부로 서술한다.
-4. 절차형 스킬은 Rationalizations(스킵 핑계+반박) / Red Flags / Verification 섹션을 포함한다 (`traceability-init/SKILL.md`가 예시).
-5. 이름 충돌 확인: 기존 스킬 목록(`./install.sh --list`)과 각 런타임의 slash command.
+1. Create `.apm/skills/<name>/SKILL.md`. `name` and `description` (with trigger patterns) are required in the frontmatter.
+2. **Path portability**: never use a home directory or machine-specific absolute path. Keep the scripts/specs/assets a skill references inside the skill directory (`scripts/`, `references/`, `toolkit/`, …) and refer to them relative to "this skill directory" — install scope and runtime change the deployed location.
+3. **Runtime neutrality**: do not make a runtime-specific tool (e.g. Claude-only Task/Workflow) a required step. If needed, phrase it conditionally ("on runtimes that support …").
+4. Procedural skills should include Rationalizations / Red Flags / Verification sections (`traceability-init/SKILL.md` is an example).
+5. Check for name collisions against the existing skills (`./install.sh --list`) and each runtime's slash commands.
 
-## 라이선스
+## Refreshing the toolkit snapshot (traceability)
 
-[Apache License 2.0](LICENSE) — Copyright 2026 Loplat Inc. 툴킷을 다른 프로젝트에 vendoring할 때는 라이선스·저작권 고지를 유지하면 된다(NOTICE 참조).
-
-## 툴킷 스냅샷 갱신 (traceability)
-
-traceability 툴킷의 upstream 개발·테스트는 참조 구현 repo(`tools/traceability/`, 테스트 포함)에서 진행한다. 릴리즈 시:
+The traceability toolkit's upstream development and tests happen in the reference-implementation repo (`tools/traceability/`, tests included). At release time:
 
 ```sh
 rsync -a --delete --exclude '__pycache__' --exclude 'tests' --exclude 'conftest.py' \
   <upstream-repo>/tools/traceability/ .apm/skills/traceability-init/toolkit/
 ```
 
-갱신 후 이 repo에 태그를 남기고, vendoring된 프로젝트는 `trace-config.yml`의 `toolkit.vendored_at`으로 drift를 추적한다.
+After refreshing, tag this repo; vendoring projects track drift via `trace-config.yml`'s `toolkit.vendored_at`.
+
+## License
+
+[Apache License 2.0](LICENSE) — Copyright 2026 Loplat Inc. When vendoring the toolkit into another project, keep the license and copyright notice (see NOTICE).

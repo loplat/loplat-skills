@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# loplat-skills 설치 스크립트 — 스코프(사용자/프로젝트)는 사용자가 선택한다.
+# loplat-skills installer -- you choose the scope (user / project).
 #
-# 사용법:
+# Usage:
 #   ./install.sh --user [--link] [--dry-run] [skill ...]
 #   ./install.sh --project <dir> [--link] [--dry-run] [skill ...]
 #   ./install.sh --list
 #
-#   --user       사용자 스코프: ~/.claude/skills/, ~/.agents/skills/
-#   --project    프로젝트 스코프: <dir>/.claude/skills/, <dir>/.agents/skills/, <dir>/.cursor/skills/
-#   --link       copy 대신 symlink (git pull 만으로 갱신됨; 개인 머신 권장)
-#   --dry-run    설치하지 않고 대상 경로만 출력
-#   skill 미지정 시 전체 스킬 설치.
+#   --user       User scope: ~/.claude/skills/, ~/.agents/skills/
+#   --project    Project scope: <dir>/.claude/skills/, <dir>/.agents/skills/, <dir>/.cursor/skills/
+#   --link       Symlink instead of copy (updates on git pull alone; recommended on a personal machine)
+#   --dry-run    Print target paths without installing
+#   With no skill listed, all skills are installed.
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -22,12 +22,12 @@ MODE="" PROJECT_DIR="" LINK=0 DRY=0 SKILLS=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --user) MODE=user ;;
-    --project) MODE=project; PROJECT_DIR="${2:?--project <dir> 필요}"; shift ;;
+    --project) MODE=project; PROJECT_DIR="${2:?--project <dir> required}"; shift ;;
     --list) ls -1 "$SRC_DIR"; exit 0 ;;
     --link) LINK=1 ;;
     --dry-run) DRY=1 ;;
     -h|--help) usage ;;
-    -*) echo "알 수 없는 옵션: $1"; usage ;;
+    -*) echo "unknown option: $1"; usage ;;
     *) SKILLS+=("$1") ;;
   esac
   shift
@@ -40,17 +40,17 @@ fi
 
 if [ "$MODE" = user ]; then
   TARGETS=("$HOME/.claude/skills" "$HOME/.agents/skills")
-  echo "[i] 사용자 스코프 설치. Cursor는 프로젝트 스코프(.cursor/skills)만 표준이므로 --project 를 사용하세요."
+  echo "[i] User-scope install. Cursor only standardizes project scope (.cursor/skills); use --project for it."
 else
   PROJECT_DIR="$(cd "$PROJECT_DIR" && pwd)"
   TARGETS=("$PROJECT_DIR/.claude/skills" "$PROJECT_DIR/.agents/skills" "$PROJECT_DIR/.cursor/skills")
 fi
 
-command -v rsync >/dev/null || { echo "[x] rsync 필요"; exit 2; }
+command -v rsync >/dev/null || { echo "[x] rsync required"; exit 2; }
 
 for skill in "${SKILLS[@]}"; do
   src="$SRC_DIR/$skill"
-  [ -d "$src" ] || { echo "[x] 스킬 없음: $skill (--list 로 확인)"; exit 2; }
+  [ -d "$src" ] || { echo "[x] no such skill: $skill (see --list)"; exit 2; }
   for tdir in "${TARGETS[@]}"; do
     dst="$tdir/$skill"
     if [ "$DRY" = 1 ]; then
@@ -70,4 +70,4 @@ for skill in "${SKILLS[@]}"; do
   done
 done
 
-[ "$DRY" = 1 ] || echo "[done] ${#SKILLS[@]}개 스킬 설치 완료. 갱신: git pull 후 재실행$( [ $LINK = 1 ] && echo ' (symlink는 pull만으로 갱신됨)' )"
+[ "$DRY" = 1 ] || echo "[done] installed ${#SKILLS[@]} skill(s). Update: git pull, then re-run$( [ $LINK = 1 ] && echo ' (symlink updates on pull alone)' )."
